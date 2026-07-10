@@ -236,6 +236,60 @@ Interfaces de Spring que representan un recurso físico (como un archivo en disc
 
 ---
 
+### Antes vs Ahora (Java 8 / Servlet API → Java 21 / Spring MVC)
+
+Este módulo se puede resolver con Servlets puros (como se hacía en 2005 con
+Apache Commons FileUpload) o con Spring MVC + `MultipartFile`. La diferencia
+en líneas de código y en manejo de errores es enorme.
+
+| Aspecto | ANTES (Servlet 3.0 + Commons FileUpload) | AHORA (Spring MVC 4.1 + Java 21) |
+|---------|------------------------------------------|-----------------------------------|
+| Recibir el archivo | `ServletFileUpload.parseRequest(req)` iterando `FileItem` | `@RequestParam("file") MultipartFile file` |
+| Streaming a disco | `item.write(new File("/tmp/..."))` con `FileOutputStream` a mano | `Files.copy(file.getInputStream(), path)` |
+| Devolver JSON | Concatenar `String` y escribir a `resp.getWriter()` | Devolver `Map<String, String>` — Jackson serializa |
+| Límite de tamaño | `upload.setSizeMax(10 * 1024 * 1024)` en cada servlet | `spring.servlet.multipart.max-file-size: 10MB` (una vez, YAML) |
+| Manejo de OOM | El dev tenía que decidir memoria vs disco (`DiskFileItemFactory`) | Spring lo resuelve por ti con `file-size-threshold` |
+| Crear directorios | `dir.mkdirs()` (booleano, no lanza excepción clara) | `Files.createDirectories(path)` (NIO.2, lanza `IOException` explícita) |
+| Rutas seguras | Manipulación de `String` propensa a path traversal | `Path.resolve().normalize()` + `startsWith` para validar |
+| Descarga | `resp.setContentType(...)` + `resp.getOutputStream().write(bytes)` | `ResponseEntity<Resource>` — Spring escribe los bytes |
+| Nombres únicos | `System.currentTimeMillis()` (colisiones bajo carga) | `UUID.randomUUID()` (128 bits, colisiones despreciables) |
+| Testear el endpoint | Levantar Jetty embebido en el test o mockear `HttpServletRequest` a mano | `MockMvc` + `MockMultipartFile` en 3 líneas |
+
+Además, el propio código Java del módulo usa sintaxis Java 21 útil:
+
+| Concepto Java 8 | Concepto Java 21 usado aquí |
+|-----------------|----------------------------|
+| `new File(uploadDir)` + `mkdirs()` | `Paths.get(...)` + `Files.createDirectories(Path)` |
+| `Map<String, String> m = new HashMap<>(); m.put(...)` | Aún se usa `HashMap` (para respetar el perfil Java 8 del alumno). En Java 21 sería `Map.of("filename", stored)` |
+| `try { ... } catch (IOException e) { throw new RuntimeException(e); }` | Igual, pero envuelto en excepciones más semánticas (`IllegalStateException`) |
+| `String s = "" + uuid + ext;` | `UUID.randomUUID() + extension` (auto-boxing del UUID vía `toString()`) |
+
+### FAQ del Alumno
+
+**¿Qué es `MultipartFile`?**
+Es una interfaz de Spring que representa un archivo cargado por HTTP. Piénsalo como el "sobre" del archivo: te da acceso a los bytes, al nombre original y al tipo MIME sin que tengas que parsear el `multipart/form-data` a mano.
+
+**¿Por qué la carpeta temporal (`java.io.tmpdir`) y no una del proyecto?**
+Porque es didáctico y limpio: cada sistema operativo la limpia sola y no ensuciamos el repositorio. En producción se usaría un volumen dedicado o un servicio como AWS S3.
+
+**¿Qué es un `Resource`?**
+La abstracción de Spring para "algo que se puede leer como bytes" — puede ser un archivo en disco (`UrlResource`), un recurso del classpath o incluso una URL remota. El controller no necesita saber de dónde vienen los bytes.
+
+**¿Por qué renombrar el archivo con UUID?**
+Si dos usuarios suben `factura.pdf`, el segundo pisaría al primero. Además, el nombre original puede contener rutas maliciosas (`../../etc/passwd`). Renombrar con UUID mata dos pájaros de un tiro.
+
+**¿Por qué `Content-Disposition: attachment`?**
+Le dice al navegador "descarga esto como archivo" en vez de "muéstralo en la pestaña". Con `inline` en cambio, un PDF o imagen se abriría dentro del navegador.
+
+**¿Qué pasa si el archivo es más grande que `max-file-size`?**
+Spring lanza `MaxUploadSizeExceededException` ANTES de que llegue a tu controller. Sin un `@RestControllerAdvice` verás un error 500 feo. En este módulo dejamos la configuración por defecto (10MB); el hardening del error queda como ejercicio.
+
+**¿Por qué `MockMvcBuilders.standaloneSetup(...)` y no `@WebMvcTest`?**
+Porque en Spring Boot 4.1.0 se ELIMINÓ `@WebMvcTest` (documentado en `MEMORY.md`). El patrón portable para el roadmap es MockMvc standalone.
+
+**¿Por qué constructor injection en lugar de `@Autowired` en campo?**
+Permite marcar el campo como `final` (inmutable), facilita los tests (no necesitas Spring para instanciar el controller) y es la recomendación oficial desde Spring 4.
+
 ### Ejercicios
 1. Configura el proyecto con `max-file-size=2MB`. Intenta subir una foto de 5MB y atrapa la excepción `MaxUploadSizeExceededException` en el ControllerAdvice.
 2. Crea el servicio `FileStorageService` que guarde las subidas en la carpeta `mis-archivos` usando un UUID.
@@ -244,25 +298,42 @@ Interfaces de Spring que representan un recurso físico (como un archivo en disc
 5. **(Avanzado)** Modifica la cabecera `Content-Disposition` a `inline` si el archivo es un JPG/PNG. Accede a la URL desde el navegador y verifica que la imagen se muestra en la pestaña en vez de descargarse forzosamente.
 
 ### Cómo ejecutar
+
 ```bash
-cd 16-subida-archivos
-mvn spring-boot:run
+# Desde 16-subida-archivos/  (Git Bash):
+./build.sh              # compila, testea y empaqueta
+java -jar target/subida-archivos-1.0.0.jar
 
-# Probar Subida:
-curl -X POST http://localhost:8080/api/files/upload \
-  -H "Content-Type: multipart/form-data" \
-  -F "file=@/ruta/a/tu/foto.jpg" \
-  -F "description=Mi Foto"
-
-# Probar Descarga:
-curl -O http://localhost:8080/api/files/download/el-uuid-generado.jpg
+# O con PowerShell:
+./build.ps1
+java -jar target/subida-archivos-1.0.0.jar
 ```
 
+Con la app corriendo en `http://localhost:8080`:
+
+```bash
+# Subir un archivo
+curl -X POST http://localhost:8080/api/files \
+  -F "file=@C:/ruta/a/mi-foto.jpg"
+# → {"filename":"3f9c...-a1b2.jpg"}
+
+# Descargar el archivo (usa el filename que devolvió el POST)
+curl -O -J http://localhost:8080/api/files/3f9c...-a1b2.jpg
+```
+
+Los archivos quedan en `${java.io.tmpdir}/roadmap-uploads/` (en Windows,
+p.ej. `C:\Users\<tu-usuario>\AppData\Local\Temp\roadmap-uploads\`).
+
 ### Archivos del Proyecto
+
 | Archivo | Propósito |
 |---------|-----------|
-| `application.yml` | Configuración de límites `multipart`. |
-| `service/FileStorageService.java` | Lógica segura de guardado y lectura de archivos. |
-| `controller/FileController.java` | Endpoints `/upload` y `/download`. |
-| `exception/FileExceptionHandler.java` | Manejador global para el error 413 (Payload Too Large). |
-| `dto/FileResponse.java` | Payload JSON con la URL resultante. |
+| `pom.xml` | Maven: hereda de `spring-boot-starter-parent 4.1.0`, sólo `web` + `test`. |
+| `build.sh` / `build.ps1` | Compilan con el JDK 21 portable + Maven portable. |
+| `src/main/resources/application.yml` | Configura `max-file-size=10MB` y `max-request-size=10MB`. |
+| `FilesApplication.java` | Punto de entrada de Spring Boot (`main`). |
+| `service/FileStorageService.java` | Guarda/carga archivos en `${java.io.tmpdir}/roadmap-uploads`. |
+| `controller/FileController.java` | `POST /api/files` (upload) y `GET /api/files/{name}` (download). |
+| `test/.../FilesApplicationTests.java` | Test humo: `contextLoads`. |
+| `test/.../FileStorageServiceTest.java` | Test unitario del servicio con `@TempDir`. |
+| `test/.../FileControllerTest.java` | Test MockMvc standalone (POST + GET). |

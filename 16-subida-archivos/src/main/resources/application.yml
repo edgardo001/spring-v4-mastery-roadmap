@@ -1,0 +1,21 @@
+# application.yml — configuración del módulo 16.
+# Spring lee este archivo automáticamente al arrancar (busca application.yml
+# o application.properties en el classpath).
+#
+# La sección 'spring.servlet.multipart' controla los límites del manejo
+# de archivos multipart/form-data (subida de archivos). Sin estos límites
+# un usuario podría tumbar el servidor subiendo archivos gigantes.
+spring:
+  application:
+    name: subida-archivos
+  servlet:
+    multipart:
+      # Activa el soporte multipart (viene activado por defecto, lo dejamos explícito).
+      enabled: true
+      # Tamaño máximo por ARCHIVO individual. 10MB alcanza para PDFs, imágenes y docs.
+      max-file-size: 10MB
+      # Tamaño máximo de la petición COMPLETA (si el cliente sube varios archivos).
+      max-request-size: 10MB
+
+server:
+  port: 8080

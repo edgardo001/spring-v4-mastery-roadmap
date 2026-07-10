@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    pom.xml = "Project Object Model" (modelo de proyecto en XML).
+    Es la RECETA que Maven lee para saber cómo construir el proyecto:
+      - Qué librerías (dependencies) descargar y en qué versión.
+      - Cómo compilar el código Java (java.version = 21).
+      - Cómo empaquetar el resultado (aquí, un fat-JAR ejecutable).
+
+    Módulo 16 — Subida y descarga de archivos con Spring MVC.
+    Sólo necesita 'web' (para el endpoint HTTP multipart) y 'test'
+    (para JUnit 5 + MockMvc). NO usa base de datos ni JPA.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+        Heredamos de spring-boot-starter-parent 4.1.0: nos regala
+        versiones alineadas de todas las librerías Spring y el plugin
+        que genera el JAR ejecutable ("fat-jar").
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <!-- Coordenadas Maven consistentes con el resto del roadmap. -->
+    <groupId>com.springroadmap</groupId>
+    <artifactId>subida-archivos</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>subida-archivos</name>
+    <description>Modulo 16 - Subida y descarga de archivos (MultipartFile)</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!--
+            spring-boot-starter-web: trae Spring MVC + Tomcat embebido +
+            Jackson (JSON) + soporte multipart/form-data listo para usar.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--
+            spring-boot-starter-test: JUnit 5 + Mockito + AssertJ +
+            MockMvc + MockMultipartFile. Sólo para la fase de test.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!-- Nombre estable del JAR: target/subida-archivos-1.0.0.jar -->
+        <finalName>subida-archivos-1.0.0</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
