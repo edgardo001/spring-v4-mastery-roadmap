@@ -204,3 +204,146 @@ curl http://localhost:8080/api/products/1
 | `service/ProductService.java` | Lógica de negocio con `@Cacheable`, `@CachePut` y `@CacheEvict`. |
 | `controller/ProductController.java` | Endpoints REST para probar los tiempos de respuesta. |
 | `domain/Product.java` | Entidad JPA o Record DTO. |
+
+---
+
+## Implementación real de este módulo
+
+Este módulo implementa la abstracción de caché de Spring con **Caffeine** (in-memory), sin depender de Redis para evitar servidores externos en los tests.
+
+### Estructura
+
+```
+17-cache/
+├── pom.xml                              spring-boot-starter-cache + caffeine
+├── build.sh / build.ps1                 scripts de build (JDK 21 + Maven 3.9)
+└── src/
+    ├── main/java/com/springroadmap/cache/
+    │   ├── CacheApplication.java        Main
+    │   ├── config/CacheConfig.java      @EnableCaching + CaffeineCacheManager
+    │   ├── service/SlowService.java     @Cacheable + @CacheEvict (contador)
+    │   └── controller/ItemController.java  GET /api/items/{id}, DELETE /api/items/{id}
+    ├── main/resources/application.yml
+    └── test/java/com/springroadmap/cache/
+        ├── CacheApplicationTests.java           contextLoads
+        ├── service/SlowServiceCacheTest.java    verifica hit/miss/evict
+        └── controller/ItemControllerTest.java   MockMvc standalone
+```
+
+### Endpoints
+
+| Método | Path | Efecto |
+|--------|------|--------|
+| `GET`    | `/api/items/{id}` | Primera vez: ~500ms + guarda en caché. Siguientes: instantáneo. |
+| `DELETE` | `/api/items/{id}` | Invalida el caché (`@CacheEvict`). |
+
+### Configuración de Caffeine
+
+```java
+CaffeineCacheManager manager = new CaffeineCacheManager("items");
+manager.setCaffeine(Caffeine.newBuilder()
+        .maximumSize(100)
+        .expireAfterWrite(60, TimeUnit.SECONDS));
+```
+
+- `maximumSize=100` evita OOM en caso de muchas entradas distintas.
+- `expireAfterWrite=60s` evita "stale data" indefinido.
+
+---
+
+## Antes vs Ahora
+
+### Antes: caché manual con `HashMap` + `volatile`
+
+```java
+@Service
+public class SlowServiceManual {
+
+    // "volatile" garantiza visibilidad entre hilos, pero NO atomicidad.
+    private volatile Map<Long, String> cache = new ConcurrentHashMap<>();
+
+    public String getItem(Long id) {
+        String cached = cache.get(id);
+        if (cached != null) {
+            return cached;                     // hit manual
+        }
+        // Sección crítica: dos hilos pueden entrar antes de cachear -> stampede.
+        try { Thread.sleep(500); } catch (InterruptedException e) { }
+        String value = "ITEM_" + id;
+        cache.put(id, value);                  // put manual
+        return value;
+    }
+
+    public void invalidate(Long id) {
+        cache.remove(id);                      // evict manual
+    }
+}
+```
+
+Problemas:
+- El código **de negocio se mezcla con la lógica de caché** (viola Separation of Concerns).
+- **Crece infinito** hasta OOM: no hay `maximumSize`.
+- **No expira**: si el dato cambia en la BD, el caché sirve datos viejos para siempre.
+- **Cache stampede**: bajo concurrencia, N hilos pueden ejecutar `sleep(500)` a la vez para la misma llave.
+- Cada método (`get`, `evict`, `update`) hay que **implementarlo a mano** en cada servicio.
+- Testear el comportamiento (hit/miss/evict) requiere inspeccionar el `Map` interno.
+
+### Ahora: `@Cacheable` + `@CacheEvict` + Caffeine
+
+```java
+@Service
+public class SlowService {
+
+    @Cacheable("items")
+    public String getItem(Long id) {
+        try { Thread.sleep(500); } catch (InterruptedException e) { }
+        return "ITEM_" + id;
+    }
+
+    @CacheEvict("items")
+    public void invalidate(Long id) { }
+}
+```
+
+Ventajas:
+- El método queda **puro**: 0 líneas dedicadas a caché.
+- El `CacheManager` centraliza `maximumSize` y `expireAfterWrite` (una sola línea cambia toda la política).
+- Caffeine implementa **W-TinyLFU** (mejor hit-rate que LRU) y estrategias contra stampede.
+- Cambiar de Caffeine a **Redis distribuido** = cambiar solo el bean `CacheManager`. **Cero cambios** en el service.
+- Los tests verifican el comportamiento observando un contador externo, sin conocer la estructura interna del caché.
+
+---
+
+## FAQ
+
+**1. ¿Por qué el `SlowServiceCacheTest` usa `@SpringBootTest` y no un unit test puro?**
+Porque `@Cacheable` funciona vía **proxy AOP**: solo se activa cuando el bean lo entrega el contexto de Spring. Si haces `new SlowService()` no hay proxy y el caché NO se aplica: los tests parecerían fallar aunque el código sea correcto.
+
+**2. ¿Por qué en `ItemControllerTest` usamos MockMvc standalone si eso ignora el caché?**
+Ese test verifica solamente el **binding HTTP** (ruta, verbo, status, payload). La verificación del caché ya está cubierta en `SlowServiceCacheTest` con contexto real. Standalone es más rápido y evita levantar todo el contexto para una prueba de wiring.
+
+**3. Llamé a un método `@Cacheable` desde otro método de la misma clase y no cachea. ¿Por qué?**
+Porque el proxy AOP intercepta llamadas **externas** al bean. Una llamada `this.getItem(id)` va directo al método, sin pasar por el proxy. Soluciones: (a) inyectar el propio bean vía `@Autowired` a sí mismo (self-injection), (b) mover el método a otro bean, o (c) usar `AopContext.currentProxy()`.
+
+**4. ¿Por qué Caffeine y no Redis?**
+Redis es un **servidor externo** que requiere levantarlo (Docker, Testcontainers, un servidor local) para que los tests pasen. Caffeine es una librería in-memory: **cero dependencias externas**, tests deterministas. La API de Spring Cache es la misma, así que la migración a Redis luego es trivial (solo cambia el `CacheManager`).
+
+**5. ¿Qué diferencia hay entre `@CacheEvict` y `@CachePut`?**
+`@CacheEvict` **borra** la entrada del caché (la próxima lectura ejecuta el método real). `@CachePut` **siempre ejecuta el método** y guarda el resultado en el caché, sin importar si ya había un valor. Usa `@CachePut` en operaciones de update para que la nueva lectura ya tenga el dato fresco sin un ciclo miss.
+
+**6. ¿Qué pasa cuando el caché se llena (maximumSize=100)?**
+Caffeine expulsa entradas usando **W-TinyLFU** (Window-TinyLFU), un algoritmo que combina LRU con frecuencia de acceso. Es superior a LRU puro en cargas reales: preserva ítems "populares" aunque no sean los más recientes.
+
+**7. ¿Por qué `expireAfterWrite` y no `expireAfterAccess`?**
+- `expireAfterWrite`: expira N segundos después de **escribir**. Garantiza refresco cada N segundos aunque el dato se lea mucho -> mejor para datos que pueden desactualizarse.
+- `expireAfterAccess`: expira N segundos después de la **última lectura**. Mantiene "calientes" los datos que se usan; útil para sesiones, pero puede servir datos viejos indefinidamente si se leen constantemente.
+
+**8. Mi contador (`callCount`) da valores raros bajo concurrencia. ¿Por qué usar `AtomicInteger`?**
+Un `int` normal no es thread-safe para `count++` (operación de 3 pasos: leer, sumar, escribir). `AtomicInteger.incrementAndGet()` es atómico vía CAS (Compare-And-Swap) del CPU, así que dos hilos concurrentes cuentan correctamente.
+
+**9. ¿El caché sobrevive a reiniciar la app?**
+No. Caffeine vive en la RAM del proceso. Si reinicias, el caché arranca vacío (cold cache). Para persistencia entre reinicios necesitas Redis, Hazelcast o similar.
+
+**10. ¿Cómo cacheo con múltiples parámetros?**
+Con `key` en SpEL: `@Cacheable(value="items", key="#tenantId + ':' + #id")`. Si no defines `key`, Spring usa `SimpleKeyGenerator` que compone los parámetros (funciona si todos tienen buen `equals/hashCode`).
+

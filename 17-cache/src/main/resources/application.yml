@@ -1,0 +1,9 @@
+# Configuración mínima del módulo 17 - Caché.
+# La configuración fina de Caffeine (maximumSize, expireAfterWrite) está en
+# CacheConfig.java como bean CacheManager, para tener control programático.
+spring:
+  application:
+    name: cache
+
+server:
+  port: 8080

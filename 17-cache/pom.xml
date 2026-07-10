@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    pom.xml del módulo 17 - Caché con Spring Cache Abstraction + Caffeine.
+    Hereda de spring-boot-starter-parent 4.1.0 (Java 21 obligatorio).
+    Usamos Caffeine (in-memory, alto rendimiento) para evitar dependencias
+    externas en tests (Redis requeriría un contenedor o servidor aparte).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.springroadmap</groupId>
+    <artifactId>cache</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>cache</name>
+    <description>Modulo 17 - Cache abstraction con Spring Cache + Caffeine</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- Web: expone el endpoint REST que dispara el caché. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--
+            spring-boot-starter-cache:
+              - Aporta la abstracción @EnableCaching, @Cacheable, @CacheEvict, @CachePut.
+              - Por sí solo usa ConcurrentMapCacheManager (sin TTL ni límite).
+              - Al agregar Caffeine + CacheManager custom, Spring lo usa automáticamente.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+
+        <!--
+            Caffeine: librería de caché en memoria de alto rendimiento
+            (successor de Guava Cache). Permite maximumSize + expireAfterWrite.
+        -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
+        <!-- Test (JUnit 5, MockMvc, AssertJ). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>cache-1.0.0</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
