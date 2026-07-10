@@ -350,3 +350,106 @@ public class Empleado {
 | `repository/EmpleadoRepository.java` | Interfaz inyectable provista por Spring Data, abanderada con consultas inferidas por método y una consulta artesanal inyectada con `@Query` (JPQL). |
 | `repository/DepartamentoRepository.java` | Repositorio puro CRUD y de mantenimiento transaccional básico para gestionar un departamento matriz. |
 | `JpaApplication.java` | Archivo núcleo arrancador del proyecto Spring Boot. |
+
+---
+
+## Implementación Real de Este Módulo (Módulo 07)
+
+Como introducción práctica, este módulo implementa un **CRUD mínimo de `Book`** — sin relaciones bidireccionales aún — para consolidar el mapeo básico `@Entity`, `JpaRepository` y su exposición REST con paginación. Los conceptos de `@OneToMany` / `@ManyToOne` explicados arriba se profundizan en ejercicios y módulos posteriores.
+
+### Alcance implementado
+- Entidad `Book` con `@Id`, `@GeneratedValue(IDENTITY)`, campos `title`, `author`, `publicationYear`.
+- `BookRepository extends JpaRepository<Book, Long>`.
+- `BookController` con GET paginado (`Pageable`), GET por id, POST, PUT, DELETE.
+- H2 en memoria + `ddl-auto: create-drop` + `show-sql: true`.
+
+### Coordenadas Maven
+- `groupId=com.springroadmap`, `artifactId=jpa-hibernate`, `version=1.0.0`.
+- Paquete raíz: `com.springroadmap.jpa`.
+- Artefacto: `target/jpa-hibernate-1.0.0.jar`.
+
+### Cómo ejecutar (concretamente)
+```bash
+# Bash (Git Bash)
+./build.sh
+java -jar target/jpa-hibernate-1.0.0.jar
+```
+```powershell
+# PowerShell
+./build.ps1
+java -jar target/jpa-hibernate-1.0.0.jar
+```
+
+### Endpoints
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/api/books?page=0&size=10&sort=title` | Lista paginada |
+| GET | `/api/books/{id}` | Detalle (200/404) |
+| POST | `/api/books` | Crea libro |
+| PUT | `/api/books/{id}` | Reemplaza libro |
+| DELETE | `/api/books/{id}` | Borra libro (204/404) |
+
+### Tests incluidos
+- `JpaHibernateApplicationTests.contextLoads()` — humo.
+- `BookRepositoryTest` con `@DataJpaTest` — save, findById, findAll, count.
+- `BookControllerTest` con `@SpringBootTest` + `MockMvcBuilders.standaloneSetup()` — CRUD completo.
+
+---
+
+## Antes vs Ahora (Java 8 → Java 21) aplicado a JPA
+
+| Tema | ANTES (Java 8 / Spring 3.x) | AHORA (Java 21 / Spring Boot 4) |
+|------|-----------------------------|---------------------------------|
+| Acceso a datos | JDBC crudo: `Connection`, `PreparedStatement`, `ResultSet`, `try/catch SQLException`, mapeo manual fila-a-objeto. | `JpaRepository<Book, Long>`: los métodos CRUD, la paginación y la traducción a SQL vienen gratis. |
+| Boilerplate por entidad | ~150 líneas: DAO + mapeo `ResultSet` + gestión de conexión + transacciones manuales. | ~50 líneas: `@Entity` + `interface Repository`. Spring genera el resto. |
+| Inyección de dependencias | `@Autowired` en campo (`private BookRepository repo;`), tests que requieren reflection. | Constructor injection (`public BookController(BookRepository r) {...}`), inmutable, testable sin Spring. |
+| Datos opcionales | `if (row == null) return null; else ...`. | `Optional<Book>` + `.map(...).orElseGet(...)`. |
+| Paginación | Cortar `List<Book>` a mano con offsets. | `Pageable pageable` como parámetro; devuelve `Page<Book>`. |
+| Generación de esquema | Scripts `.sql` mantenidos a mano, alineación clase↔tabla frágil. | `ddl-auto: create-drop` en dev, Flyway/Liquibase en prod, entidad como fuente de verdad. |
+| Inmutabilidad | POJO con setters expuestos siempre. | Clase JPA con constructor protected sin args + constructor público con campos + solo getters. |
+
+### Comparación de código: JDBC crudo vs Spring Data JPA
+
+```java
+// ANTES — JDBC puro (Java 8 style)
+public Book findById(Long id) throws SQLException {
+    try (Connection c = dataSource.getConnection();
+         PreparedStatement ps = c.prepareStatement("SELECT * FROM books WHERE id = ?")) {
+        ps.setLong(1, id);
+        try (ResultSet rs = ps.executeQuery()) {
+            if (!rs.next()) return null;
+            Book b = new Book();
+            b.setId(rs.getLong("id"));
+            b.setTitle(rs.getString("title"));
+            b.setAuthor(rs.getString("author"));
+            b.setPublicationYear(rs.getInt("publication_year"));
+            return b;
+        }
+    }
+}
+```
+
+```java
+// AHORA — Spring Data JPA
+Optional<Book> book = repository.findById(id);
+```
+
+Una línea sustituye 15+ líneas, elimina el manejo manual de conexiones y previene fugas de recursos e inyecciones SQL.
+
+---
+
+## FAQ del Alumno
+
+- **¿Qué es un `@Entity`?** Una anotación que le dice a JPA: "esta clase Java corresponde a una tabla". Cada instancia = una fila.
+- **¿Por qué la clase `Book` no es un `record` como en otros módulos?** Porque JPA necesita crear el objeto vacío por reflection y luego rellenar los campos. `record` es inmutable y no expone constructor sin argumentos — no sirve como entidad JPA.
+- **¿Qué es `JpaRepository`?** Una interfaz genérica que, al extenderla, te regala métodos CRUD (`save`, `findById`, `findAll`, `deleteById`, `count`, `findAll(Pageable)`) sin escribir código.
+- **¿Quién implementa esa interfaz si yo solo la declaro?** Spring Data JPA en tiempo de arranque genera un *proxy dinámico* que implementa los métodos delegando a Hibernate.
+- **¿Qué es H2?** Una base de datos SQL escrita en Java que puede vivir totalmente en memoria RAM. Ideal para pruebas y ejemplos porque no requiere instalación.
+- **¿Qué hace `ddl-auto: create-drop`?** Al arrancar la app, Hibernate crea las tablas leyendo tus `@Entity`. Al parar, borra todo. Perfecto para desarrollo, **prohibido en producción**.
+- **¿Qué es `Pageable`?** Un objeto que agrupa página, tamaño y ordenamiento. Spring lo construye automáticamente de los query params `?page=0&size=10&sort=title`.
+- **¿Por qué `Long id` y no `long id`?** Porque `Long` puede ser `null`, señalando a Hibernate que la entidad es nueva (INSERT). `long` empezaría en 0 y confundiría al motor.
+- **¿Qué es "constructor injection"?** Recibir las dependencias como parámetros del constructor en lugar de anotar campos con `@Autowired`. Ventajas: `final`, testeable, sin nulls sorpresa.
+- **¿Por qué `@DataJpaTest` en el test de repositorio y `@SpringBootTest` en el de controller?** `@DataJpaTest` carga solo el slice JPA (rápido, con rollback automático). Los tests del controller necesitan más piezas del contexto, así que usamos `@SpringBootTest` + MockMvc standalone.
+- **¿Puedo usar la consola web H2 para inspeccionar los datos?** Sí, cambiando `spring.h2.console.enabled: true`. Está deshabilitada por hardening: en producción es una brecha si se expone.
+- **¿Qué pasa si me olvido del constructor sin argumentos en la entidad?** Hibernate lanza `InstantiationException` al arrancar: no puede crear la entidad por reflection.
+

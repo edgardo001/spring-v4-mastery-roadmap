@@ -1,0 +1,45 @@
+server:
+  port: 8080
+  # Hardening: nunca revelar la versión del servidor a atacantes.
+  error:
+    include-stacktrace: never
+    include-message: never
+
+spring:
+  application:
+    name: jpa-hibernate
+
+  # ================================================================
+  # DataSource H2 en memoria — se crea al arrancar y se borra al parar.
+  # ================================================================
+  datasource:
+    url: jdbc:h2:mem:booksdb;DB_CLOSE_DELAY=-1;MODE=LEGACY
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+      connection-timeout: 5000
+
+  jpa:
+    # Hibernate genera el esquema al arrancar (create) y lo tira al parar (drop).
+    # En producción SIEMPRE usar `validate` o `none` + Flyway/Liquibase.
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        # No exponer parámetros de queries en logs (data masking mínimo).
+        use_sql_comments: true
+
+  # Consola web H2 deshabilitada por defecto — evitar exposición accidental.
+  h2:
+    console:
+      enabled: false
+
+logging:
+  level:
+    org.hibernate.SQL: DEBUG
+    org.springframework.web: INFO
