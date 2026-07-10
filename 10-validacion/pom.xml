@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    pom.xml del módulo 10 - Validación de Datos (Bean Validation / Jakarta Validation).
+
+    Coordenadas del artefacto:
+      - groupId    = com.springroadmap
+      - artifactId = validacion
+      - version    = 1.0.0
+      - finalName  = validacion-1.0.0  -> target/validacion-1.0.0.jar
+
+    Dependencias clave del módulo 10:
+      - spring-boot-starter-web        -> exposer un endpoint POST /api/users.
+      - spring-boot-starter-validation -> Bean Validation (Hibernate Validator).
+                                          NOTA: en Spring Boot 3+ / 4.x, `web` YA NO
+                                          incluye validation transitivamente. Debe
+                                          declararse explícitamente para que @Valid
+                                          funcione en @RequestBody.
+      - spring-boot-starter-test       -> JUnit 5 + MockMvc + AssertJ (solo test).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.springroadmap</groupId>
+    <artifactId>validacion</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>validacion</name>
+    <description>Modulo 10 - Validacion de Datos con Bean Validation (Jakarta)</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- Web para exponer el endpoint POST /api/users. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Validation: Jakarta Validation API + Hibernate Validator.
+             Sin esta dependencia, @Valid + @NotBlank/@Email/@Min/@Pattern
+             son ignorados en silencio (o fallan al arrancar). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- Test (JUnit 5, MockMvc, AssertJ). Solo en fase de test. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>validacion-1.0.0</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

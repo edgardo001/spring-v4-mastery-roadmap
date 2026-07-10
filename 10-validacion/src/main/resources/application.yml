@@ -1,0 +1,22 @@
+# application.yml del módulo 10.
+# Reutiliza el hardening estándar de la roadmap: no filtramos detalles de
+# errores internos al cliente (stacktraces, mensajes, excepciones).
+# Los errores de validación SÍ los mostramos, pero los construimos NOSOTROS
+# desde ValidationExceptionHandler, no Spring por defecto.
+server:
+  port: 8080
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+    include-exception: false
+  server-header: ""
+
+spring:
+  application:
+    name: validacion
+
+logging:
+  level:
+    root: INFO
+    com.springroadmap: DEBUG

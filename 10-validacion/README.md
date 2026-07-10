@@ -345,3 +345,134 @@ curl -X POST http://localhost:8080/api/employees \
 | `exception/GlobalExceptionHandler.java` | `@RestControllerAdvice` para errores de validación. |
 | `validation/UniqueEmail.java` | Anotación de validación personalizada. |
 | `validation/UniqueEmailValidator.java` | Implementación del validador custom. |
+
+---
+
+## Implementación en este módulo (`validacion-1.0.0`)
+
+Este módulo entrega una implementación **mínima y ejecutable** del contenido teórico
+anterior, enfocada en tres piezas: un DTO validado, un Controller que exige `@Valid`
+y un handler global que traduce los errores a JSON.
+
+### Coordenadas
+- `groupId` = `com.springroadmap`
+- `artifactId` = `validacion`
+- `version` = `1.0.0`
+- Package raíz: `com.springroadmap.validation`
+- Artefacto: `target/validacion-1.0.0.jar`
+- Spring Boot 4.1.0 / Java 21 (sin Lombok).
+
+### Estructura entregada
+```
+10-validacion/
+  pom.xml
+  build.ps1
+  build.sh
+  src/main/java/com/springroadmap/validation/
+    ValidationApplication.java
+    dto/UserRequest.java
+    controller/UserController.java
+    exception/ValidationExceptionHandler.java
+  src/main/resources/application.yml
+  src/test/java/com/springroadmap/validation/
+    ValidationApplicationTests.java
+    controller/UserControllerTest.java
+```
+
+### Endpoint
+`POST /api/users` con body JSON:
+```json
+{ "name": "Ada", "email": "ada@example.com", "age": 30, "pin": "1234" }
+```
+Reglas aplicadas al `UserRequest`:
+- `name`  — `@NotBlank`
+- `email` — `@Email`
+- `age`   — `@Min(18)`
+- `pin`   — `@Pattern("\\d{4}")`
+
+Respuestas:
+- **201 Created** si todo es válido.
+- **400 Bad Request** con `Map<String,String>` (campo → mensaje) si falla `@Valid`.
+
+### Antes vs Ahora
+
+**ANTES** (Java 8, validación manual con `if`s):
+```java
+public ResponseEntity<?> create(@RequestBody UserRequest req) {
+    if (req.getName() == null || req.getName().isBlank()) {
+        return ResponseEntity.badRequest().body("name obligatorio");
+    }
+    if (req.getEmail() == null || !req.getEmail().matches(".+@.+\\..+")) {
+        return ResponseEntity.badRequest().body("email inválido");
+    }
+    if (req.getAge() < 18) {
+        return ResponseEntity.badRequest().body("age >= 18");
+    }
+    if (req.getPin() == null || !req.getPin().matches("\\d{4}")) {
+        return ResponseEntity.badRequest().body("pin debe ser 4 dígitos");
+    }
+    // ... por fin lógica de negocio ...
+}
+```
+Problemas: mezcla validación con negocio, se olvida fácil, falla al primer error
+(el usuario ve los errores de a uno), y hay que replicarlo en cada endpoint.
+
+**AHORA** (Spring Boot 4 + Jakarta Validation):
+```java
+@PostMapping
+public ResponseEntity<Void> create(@Valid @RequestBody UserRequest req) {
+    return ResponseEntity.status(HttpStatus.CREATED).build();
+}
+```
+Las reglas viven en el DTO. Spring valida SIEMPRE, acumula TODOS los errores y
+`ValidationExceptionHandler` los devuelve como JSON limpio. Cero `if`.
+
+### FAQ Alumno
+
+**P: ¿Por qué mi `@Valid` no valida nada?**
+R: (1) Falta `spring-boot-starter-validation` en `pom.xml`. (2) Olvidaste el `@Valid`
+antes de `@RequestBody`. (3) Importaste `javax.validation.Valid` en vez de
+`jakarta.validation.Valid` (Spring Boot 3+/4.x usa Jakarta).
+
+**P: ¿Puedo usar `@NotBlank` sobre un `int`?**
+R: No. `@NotBlank` es solo para `CharSequence`. Para primitivos numéricos usa
+`@Min`/`@Max`/`@Positive`. Para wrappers (`Integer`) puedes combinar `@NotNull`.
+
+**P: En el test, mando un JSON inválido y el body llega vacío. ¿Por qué?**
+R: En `standaloneSetup`, Spring NO descubre `@RestControllerAdvice` por escaneo
+de contexto. Debes registrarlo manualmente:
+```java
+MockMvcBuilders.standaloneSetup(controller)
+    .setControllerAdvice(new ValidationExceptionHandler())
+    .build();
+```
+Sin esa línea, obtienes un 400 sin body y los asserts sobre `"name"` o `"email"` fallan.
+
+**P: ¿Por qué el body es `Map<String,String>` y no un objeto rico con timestamp?**
+R: Por simplicidad pedagógica del módulo 10. En el módulo 11 (Manejo de Excepciones)
+ampliamos a `{ status, error, fieldErrors, timestamp }`.
+
+**P: ¿Qué pasa si dos anotaciones fallan en el mismo campo (ej. `@NotBlank` + `@Email`)?**
+R: `getBindingResult().getFieldErrors()` devuelve ambas. Nuestro handler usa
+`Map.put()`, así que solo conserva la PRIMERA. Si quieres las dos, usa
+`Map<String, List<String>>` en un módulo posterior.
+
+**P: ¿Cómo pruebo desde curl?**
+```bash
+curl -i -X POST http://localhost:8080/api/users \
+     -H "Content-Type: application/json" \
+     -d '{"name":"","email":"nope","age":10,"pin":"12"}'
+# -> 400 con {"name":"...", "email":"...", "age":"...", "pin":"..."}
+```
+
+### Cómo construir
+```powershell
+# Windows
+./build.ps1
+```
+```bash
+# Linux/macOS
+./build.sh
+```
+Artefacto resultante: `target/validacion-1.0.0.jar`.
+
