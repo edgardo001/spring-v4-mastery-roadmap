@@ -253,3 +253,72 @@ mvn spring-boot:run
 | `domain/User.java` | Entidad JPA que mapea a la tabla `users`. |
 | `domain/Order.java` | Entidad JPA que mapea a la tabla `orders`. |
 | `repository/UserRepository.java` | Repositorio JPA para consultas de usuarios. |
+
+---
+
+### Antes vs Ahora
+
+#### Antes (SQL manual / `ddl-auto=update`)
+- El DBA (o el desarrollador) ejecutaba manualmente `ALTER TABLE` en cada entorno.
+- No existía historial: nadie sabía si `staging` tenía el mismo esquema que `prod`.
+- Si un desarrollador olvidaba correr un script, la aplicación reventaba en runtime con `Column not found`.
+- Los rollbacks eran manuales, propensos a error y muchas veces destruían datos.
+- Con `ddl-auto=update`, Hibernate agregaba columnas silenciosamente pero jamas las eliminaba ni renombraba: la BD se llenaba de basura.
+
+```sql
+-- Flujo tipico "antes"
+-- Lunes: DBA en dev
+ALTER TABLE authors ADD COLUMN bio VARCHAR(500);
+-- Miercoles: alguien olvida correrlo en staging -> boom
+```
+
+#### Ahora (Flyway versionado)
+- Cada cambio vive como archivo `V*.sql` en `src/main/resources/db/migration/`.
+- Al arrancar, Spring Boot invoca Flyway automaticamente: aplica solo lo pendiente.
+- La tabla `flyway_schema_history` documenta version, checksum, fecha y usuario.
+- El esquema queda 100% reproducible: `git clone` + `mvn spring-boot:run` = misma BD que en produccion.
+- `ddl-auto=validate` garantiza que las entidades JPA calzan con las tablas creadas por Flyway.
+
+```
+src/main/resources/db/migration/
+├── V1__create_authors.sql   (crea tabla authors)
+├── V2__create_books.sql     (crea tabla books + FK)
+└── V3__seed_data.sql        (inserta 2 autores + 3 libros)
+```
+
+Este modulo demuestra el flujo completo: Flyway crea el esquema, JPA lo valida, los repositorios lo consultan y el controller lo expone en `GET /api/authors`.
+
+---
+
+### FAQ Alumno
+
+**P: ¿Por que `ddl-auto: validate` y no `none`?**
+R: `validate` verifica al arrancar que las columnas/tipos de tus `@Entity` coinciden con las tablas reales. Es una red de seguridad barata que detecta el drift entre codigo y esquema. `none` no valida nada.
+
+**P: Cambie `V1__create_authors.sql` y ahora no arranca. ¿Que hago?**
+R: Nunca edites migraciones aplicadas. Flyway calcula un checksum y si cambia, aborta. La solucion correcta es crear una `V4__fix_authors_column.sql` con el `ALTER TABLE` necesario. En desarrollo local extremo puedes borrar la BD H2 (`rm -rf` del archivo) y dejar que Flyway reaplique todo.
+
+**P: ¿Como veo la tabla `flyway_schema_history`?**
+R: Con la app corriendo, abre http://localhost:8080/h2-console, usa la URL `jdbc:h2:mem:migrationsdb`, usuario `sa`, sin password. Ejecuta `SELECT * FROM flyway_schema_history;`.
+
+**P: ¿Por que `H2` en memoria y no PostgreSQL?**
+R: Para el modulo educativo. En produccion apuntarias `spring.datasource.url` a Postgres/MySQL y Flyway se comporta identico, solo cambian las sentencias SQL propias del motor.
+
+**P: ¿Flyway reemplaza a Hibernate?**
+R: No. Son complementarios: Flyway maneja el DDL (estructura), Hibernate maneja el DML (insert/update/select desde tus entidades). Nunca uses `ddl-auto=update` junto a Flyway: se pelean.
+
+**P: ¿Los tests corren Flyway?**
+R: Si. `@SpringBootTest` levanta el contexto completo, Flyway ejecuta V1-V3 sobre la H2 en memoria y los tests ven los 2 autores del seed.
+
+**P: ¿Que pasa si dos devs crean `V4__...sql` al mismo tiempo en ramas distintas?**
+R: Al hacer merge Flyway aplicara ambos en orden alfabetico de nombre, pero es fragil. Convencion recomendada: usar timestamps (`V20260710_1430__add_isbn.sql`) para evitar colisiones.
+
+---
+
+### Ejecutar los tests
+```bash
+cd 08-migraciones-bd
+./build.sh          # Linux/Mac
+.\build.ps1         # Windows PowerShell
+```
+Genera `target/migraciones-bd-1.0.0.jar` tras `mvn clean verify`.
