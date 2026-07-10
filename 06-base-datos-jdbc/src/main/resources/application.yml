@@ -1,0 +1,39 @@
+# application.yml del módulo 06 - CRUD con JdbcTemplate + H2.
+# Reutiliza el hardening de módulos previos y añade la configuración del DataSource.
+server:
+  port: 8080
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+    include-exception: false
+  server-header: ""
+
+spring:
+  application:
+    name: base-datos-jdbc
+  # DataSource H2 en memoria: se pierde al apagar la app (ideal para demos y tests).
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=LEGACY
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 20000
+  # Le indicamos a Spring Boot que ejecute schema.sql y data.sql SIEMPRE al arrancar.
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+      data-locations: classpath:data.sql
+  # Consola H2 apagada por defecto (hardening). Actívala en local si la necesitas.
+  h2:
+    console:
+      enabled: false
+
+logging:
+  level:
+    root: INFO
+    com.springroadmap: DEBUG
+    org.springframework.jdbc.core.JdbcTemplate: DEBUG

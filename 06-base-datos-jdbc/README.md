@@ -244,6 +244,29 @@ Las transacciones son como el carrito de compras en internet. Tú seleccionas 10
 **Casos de Uso Empresariales:**
 Sistemas de inventario, procesos de compra y pagos, reserva de butacas para cine o avión, transferencia de archivos financieros. Absolutamente CUALQUIER proceso de negocio que altere dos o más tablas que dependen una de la otra en la base de datos DEBE ser envuelto en `@Transactional`.
 
+### Antes vs Ahora (Java 8 → Java 21)
+
+| Concepto | ANTES (Java 8) | AHORA (Java 21) |
+|---|---|---|
+| DTO / entidad | `public class Customer { private final Long id; ... 40 líneas de getters/equals/hashCode }` | `public record Customer(Long id, String name, String email) {}` |
+| RowMapper | Clase anónima con `mapRow(ResultSet rs, int rowNum)` de 6 líneas | Lambda: `(rs, rowNum) -> new Customer(rs.getLong("id"), ...)` |
+| Ausencia de dato | `Customer c = repo.buscar(id); if (c == null) return 404;` | `repo.findById(id).map(ResponseEntity::ok).orElseGet(() -> ResponseEntity.notFound().build())` |
+| Recuperar id generado | Manejar `PreparedStatement`, `getGeneratedKeys()`, cerrar `ResultSet` a mano | `KeyHolder` + `jdbcTemplate.update(psCreator, keyHolder)` |
+| Manejo de errores JDBC | `try/catch (SQLException)` obligatorio en cada método | `DataAccessException` (unchecked): capturas SOLO si te aporta valor (ej. `EmptyResultDataAccessException`) |
+
+### FAQ del Alumno
+
+- **¿Qué es un `DataSource`?** Una "fábrica de conexiones" a la base de datos. HikariCP mantiene un pool de conexiones abiertas y las presta cuando las necesitas — es mucho más rápido que abrir una conexión nueva cada vez.
+- **¿Quién crea el `JdbcTemplate`?** Spring Boot: en cuanto detecta el starter `spring-boot-starter-jdbc` y un `DataSource` (autoconfigurado desde `application.yml`), instancia un `JdbcTemplate` como bean y lo inyecta a quien lo pida por constructor.
+- **¿Por qué la BD "desaparece" al parar la app?** Porque usamos H2 en modo `mem:` (memoria). Ideal para aprender y para tests. En producción cambiarías la URL a PostgreSQL/MySQL y NADA más del código cambia.
+- **¿Cuándo se ejecutan `schema.sql` y `data.sql`?** Al arrancar la aplicación, gracias a `spring.sql.init.mode=always`. Se ejecutan en ese orden: primero el DDL, luego los INSERT.
+- **¿Qué diferencia hay entre `query()` y `queryForObject()`?** `query()` acepta 0..N resultados y devuelve `List`. `queryForObject()` exige EXACTAMENTE 1 resultado; con 0 lanza `EmptyResultDataAccessException`, con más de 1 lanza otra excepción.
+- **¿Por qué `Optional<Customer>` en vez de retornar `null`?** Para forzar al caller a manejar el caso "no encontrado" de forma explícita. Es imposible olvidarse: no compila si intentas `.name()` sin desenvolverlo.
+- **¿Por qué el POST devuelve 201 y no 200?** Convención REST: 201 significa "recurso creado". Además incluimos header `Location` con la URL del nuevo recurso.
+- **¿Qué es un `record`?** Una clase inmutable compacta de Java 14+. El compilador genera constructor, getters (sin el prefijo `get`), `equals`, `hashCode` y `toString` a partir de la declaración `record Customer(Long id, String name, String email) {}`.
+- **¿Por qué `@Repository` y no `@Component`?** Ambas registran un bean, pero `@Repository` activa la traducción automática de `SQLException` a la jerarquía `DataAccessException` de Spring — mucho más manejables porque son `RuntimeException`.
+- **¿Por qué usamos `KeyHolder`?** Para recuperar el `id` que la base de datos generó con `AUTO_INCREMENT`. Sin él, no sabrías el id del registro que acabas de crear.
+
 ### Ejercicios
 1. Crea una tabla adicional `productos (id, nombre, precio, stock)`. En `src/main/resources/schema.sql` escribe el DDL y en `data.sql` inserta 3 productos.
 2. Crea un `ProductoRepository` usando `JdbcTemplate`. Implementa un método `comprar(Long productoId, int cantidad)`.
@@ -255,29 +278,49 @@ Sistemas de inventario, procesos de compra y pagos, reserva de butacas para cine
 4. Intenta ejecutar una compra donde el usuario no existe y verifica, accediendo a la consola de H2, que el stock del producto no se haya modificado (gracias al rollback de la transacción fallida).
 
 ### Cómo ejecutar
-1. Asegúrate de tener JDK 21 y Maven instalados.
-2. Abre tu terminal en el directorio `06-base-datos-jdbc`.
-3. Compila y ejecuta el proyecto:
-   ```bash
-   mvn clean compile
-   mvn spring-boot:run
-   ```
-4. Si dejaste H2 console activo en tu `application.yml`, entra desde tu navegador web a `http://localhost:8080/h2-console`
-   - URL de JDBC: `jdbc:h2:mem:testdb`
-   - Usuario: `sa`
-   - Password: (vacío)
-   Desde ahí podrás ver tus tablas en memoria y ejecutar sentencias SQL manualmente para comprobar tus resultados.
+
+Desde la raíz de `06-base-datos-jdbc/`:
+
+**Git Bash:**
+```bash
+./build.sh
+java -jar target/base-datos-jdbc-1.0.0.jar
+```
+
+**PowerShell:**
+```powershell
+./build.ps1
+java -jar target/base-datos-jdbc-1.0.0.jar
+```
+
+**Endpoints disponibles:**
+- `GET  http://localhost:8080/api/customers`      -> lista todos.
+- `GET  http://localhost:8080/api/customers/{id}` -> 200 con customer, 404 si no existe.
+- `POST http://localhost:8080/api/customers`      -> body JSON `{"name":"...","email":"..."}`, responde 201 + header `Location`.
+- `DELETE http://localhost:8080/api/customers/{id}` -> 204 si borró, 404 si no existía.
+
+**Ejemplo curl:**
+```bash
+curl -i -X POST http://localhost:8080/api/customers \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Grace Hopper","email":"grace@example.com"}'
+```
+
+**Nota sobre la consola H2:** está deshabilitada por hardening en `application.yml` (`spring.h2.console.enabled: false`). Para activarla en local, cambia a `true` y navega a `http://localhost:8080/h2-console` con URL `jdbc:h2:mem:testdb`, usuario `sa`, contraseña vacía.
 
 ### Archivos del Proyecto
 
 | Archivo | Propósito |
 |---------|-----------|
-| `pom.xml` | Define las dependencias del módulo, en especial `spring-boot-starter-jdbc` y el driver `h2`. |
-| `src/main/resources/application.yml` | Configuración del DataSource, pool HikariCP y la consola de H2. |
-| `src/main/resources/schema.sql` | Archivo auto-ejecutado por Spring al arrancar. Crea las tablas (DDL). |
-| `src/main/resources/data.sql` | Archivo auto-ejecutado por Spring al arrancar. Inserta los datos de prueba iniciales (DML). |
-| `com/springroadmap/jdbc/domain/Usuario.java` | Record o Clase (entidad de dominio) que representa un registro en la base de datos. |
-| `com/springroadmap/jdbc/repository/UsuarioRepository.java` | Contiene la lógica de acceso a datos utilizando `JdbcTemplate` y `RowMapper`. |
-| `com/springroadmap/jdbc/service/TransferenciaService.java` | Lógica de negocio transaccional decorada obligatoriamente con `@Transactional`. |
-| `com/springroadmap/jdbc/controller/UsuarioController.java` | (Opcional) Expone los repositorios o servicios a través de peticiones HTTP REST. |
-| `com/springroadmap/jdbc/SpringJdbcApplication.java` | La clase principal de arranque de la aplicación Spring Boot. |
+| `pom.xml` | Dependencias: `spring-boot-starter-web`, `spring-boot-starter-jdbc`, `com.h2database:h2` (runtime), `spring-boot-starter-test`. `finalName=base-datos-jdbc-1.0.0`. |
+| `build.sh` / `build.ps1` | Scripts portables que exportan `JAVA_HOME` al JDK 21 local y ejecutan `mvn clean verify`. |
+| `src/main/resources/application.yml` | Configuración del DataSource H2 en memoria, pool HikariCP, ejecución de `schema.sql`/`data.sql` y hardening. |
+| `src/main/resources/schema.sql` | DDL: crea la tabla `customers (id, name, email)`. |
+| `src/main/resources/data.sql` | DML: inserta 2 customers de ejemplo (Ada Lovelace, Alan Turing). |
+| `com/springroadmap/jdbc/BaseDatosJdbcApplication.java` | Clase principal `@SpringBootApplication`. |
+| `com/springroadmap/jdbc/domain/Customer.java` | Entidad como `record` de Java 21. |
+| `com/springroadmap/jdbc/repository/CustomerRepository.java` | Acceso a datos con `JdbcTemplate`: `findAll`, `findById` (Optional), `save` (KeyHolder), `deleteById`. |
+| `com/springroadmap/jdbc/controller/CustomerController.java` | REST controller: GET, POST (201 + Location), DELETE (204). |
+| `src/test/.../BaseDatosJdbcApplicationTests.java` | `contextLoads`. |
+| `src/test/.../repository/CustomerRepositoryTest.java` | `@SpringBootTest` con H2 real: findAll, save + id generado, findById OK/vacío. |
+| `src/test/.../controller/CustomerControllerTest.java` | MockMvc `standaloneSetup` + repo real (H2): GET, GET 404, POST 201, DELETE 204. |
