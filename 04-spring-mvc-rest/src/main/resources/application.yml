@@ -1,0 +1,25 @@
+# application.yml del módulo 04. Reutiliza el hardening del módulo 02
+# (recomendación del agente de Seguridad):
+#   - No filtrar stacktraces al cliente en errores (evita fuga de info).
+#   - Ocultar el header "Server: Tomcat/..." (evita fingerprinting).
+server:
+  port: 8080
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+    include-exception: false
+  server-header: ""
+
+spring:
+  application:
+    name: spring-mvc-rest
+  # Jackson: fallar si el JSON entrante trae propiedades desconocidas es demasiado
+  # estricto para un módulo didáctico; dejamos el default (ignora desconocidas).
+  jackson:
+    default-property-inclusion: non_null
+
+logging:
+  level:
+    root: INFO
+    com.springroadmap: DEBUG
