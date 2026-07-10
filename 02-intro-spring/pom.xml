@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    pom.xml = "Project Object Model" en formato XML.
+    Es el archivo maestro que Maven lee para saber:
+      - Qué versiones de librerías descargar.
+      - Cómo compilar el proyecto.
+      - Cómo empaquetarlo (aquí, como .jar ejecutable).
+    Piensa en el pom.xml como la "receta" del proyecto:
+    ingredientes (dependencias), utensilios (plugins) y pasos (fases).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+        <parent> = herencia Maven. Al heredar de spring-boot-starter-parent
+        conseguimos GRATIS: versiones alineadas de todas las librerías Spring,
+        plugin de empaquetado, y un fat-jar ejecutable ya configurado.
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <!--
+        Coordenadas del proyecto (equivalente a un "nombre único global").
+        groupId    = organización / dominio invertido.
+        artifactId = nombre corto del módulo.
+        version    = versión semántica (mayor.menor.patch).
+        packaging  = tipo de artefacto que se produce (jar, war, pom).
+    -->
+    <groupId>com.springroadmap</groupId>
+    <artifactId>intro-spring</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>intro-spring</name>
+    <description>Modulo 02 - Introduccion a Spring Boot</description>
+
+    <properties>
+        <!-- Java 21 (LTS). Debe coincidir con el JDK portable del roadmap. -->
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!--
+            "Starter" = paquete pre-configurado de dependencias. Trae:
+              - Spring MVC (framework web)
+              - Tomcat embebido (servidor HTTP dentro del JAR)
+              - Jackson (para convertir objetos Java a JSON)
+              - Logging (Logback)
+            Con esta única dependencia arranca un servidor web completo.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--
+            Starter de testing. Trae JUnit 5, Mockito, AssertJ, MockMvc.
+            scope=test: solo se usa al compilar/ejecutar tests, no viaja
+            dentro del JAR final.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!-- Nombre estable del JAR: target/intro-spring-1.0.0.jar -->
+        <finalName>intro-spring-1.0.0</finalName>
+        <plugins>
+            <!--
+                spring-boot-maven-plugin: convierte nuestro proyecto en un
+                "fat JAR" ejecutable (incluye TODAS las dependencias). Con
+                ese JAR basta un `java -jar` para arrancar la app.
+            -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

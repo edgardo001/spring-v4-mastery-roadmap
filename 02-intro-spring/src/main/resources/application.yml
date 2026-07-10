@@ -1,0 +1,35 @@
+# application.yml = archivo de configuración de Spring Boot.
+# Alternativa a application.properties pero con formato YAML (más legible).
+# Spring lo lee automáticamente al arrancar.
+
+server:
+  # Puerto TCP donde escucha el servidor Tomcat embebido.
+  # 8080 es la convención histórica para servidores Java.
+  # Un "puerto" es un número (0-65535) que identifica un "canal" en tu PC
+  # donde una aplicación recibe conexiones de red.
+  port: 8080
+
+  # === Hardening mínimo (recomendación del agente de Seguridad) ===
+  # Evita filtrar información interna al cliente en respuestas de error.
+  error:
+    include-stacktrace: never     # no revelar stack trace de Java
+    include-message: never        # no revelar mensaje de la excepción
+    include-binding-errors: never # no revelar errores de validación
+    include-exception: false      # no revelar clase de la excepción
+
+  # Vaciar el header "Server: ..." reduce el fingerprinting de tu servidor
+  # (no anuncia "estoy corriendo Tomcat vX.Y" a bots que escanean vulnerabilidades).
+  server-header: ""
+
+spring:
+  application:
+    # Nombre lógico de la app. Aparece en logs y, más adelante, en
+    # herramientas de service discovery (Eureka en módulo 41).
+    name: intro-spring
+
+# No revelar detalles de excepciones en logs de acceso al cliente.
+# (log-resolved-exception=true dumpea excepciones resueltas por handlers).
+logging:
+  level:
+    root: INFO
+    com.springroadmap: DEBUG    # nuestro código en modo detallado
