@@ -1,0 +1,17 @@
+# =========================================================================
+# application-dev.yml — Overrides para el perfil "dev".
+# =========================================================================
+# Se activa con:  -Dspring.profiles.active=dev  o  SPRING_PROFILES_ACTIVE=dev
+# En tests: @ActiveProfiles("dev").
+#
+# Sobrescribe SOLO las claves que cambian. Las demás heredan de application.yml.
+# =========================================================================
+app:
+  name: "Configuracion Roadmap (DEV)"
+  features:
+    email-enabled: true
+    max-users: 10
+
+logging:
+  level:
+    com.springroadmap: TRACE

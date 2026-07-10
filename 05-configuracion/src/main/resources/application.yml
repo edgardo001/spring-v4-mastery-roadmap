@@ -1,0 +1,38 @@
+# =========================================================================
+# application.yml — Configuración base (perfil "default").
+# =========================================================================
+# Hardening reutilizado de los módulos 02/03 + prefijo `app:` demostrando
+# properties tipadas mapeadas a AppProperties.
+#
+# NOTA: NO activamos ningún perfil por defecto (spring.profiles.active
+# ausente). Los tests activan `dev` con @ActiveProfiles y el runtime
+# activa `prod` con -Dspring.profiles.active=prod o SPRING_PROFILES_ACTIVE.
+# =========================================================================
+server:
+  port: 8080
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+    include-exception: false
+  server-header: ""
+
+spring:
+  application:
+    name: configuracion
+
+logging:
+  level:
+    root: INFO
+    com.springroadmap: DEBUG
+
+# -------------------------------------------------------------------------
+# Bloque "app.*" mapeado a com.springroadmap.config.props.AppProperties
+# via @ConfigurationProperties(prefix = "app").
+# -------------------------------------------------------------------------
+app:
+  name: "Configuracion Roadmap (default)"
+  version: "1.0.0"
+  features:
+    email-enabled: false
+    max-users: 100

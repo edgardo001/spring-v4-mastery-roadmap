@@ -1,0 +1,17 @@
+# =========================================================================
+# application-prod.yml — Overrides para el perfil "prod".
+# =========================================================================
+# Se activa con:  -Dspring.profiles.active=prod
+#
+# En producción subimos maxUsers y desactivamos el envío de email (por
+# ejemplo si aún no está integrada la pasarela SMTP corporativa).
+# =========================================================================
+app:
+  name: "Configuracion Roadmap (PROD)"
+  features:
+    email-enabled: true
+    max-users: 100000
+
+logging:
+  level:
+    com.springroadmap: WARN
