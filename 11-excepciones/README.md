@@ -353,36 +353,84 @@ Formato estándar de la industria para errores HTTP, soportado nativamente por S
 
 ---
 
+### Antes vs Ahora (Java 8 → Java 21)
+
+| Tema | ANTES (Java 8) | AHORA (Java 21) |
+|------|----------------|-----------------|
+| DTO de error | POJO de 30+ líneas con getters/setters/equals/hashCode | `public record ErrorResponse(String code, String message, Instant timestamp, String path) {}` (1 línea) |
+| Fecha/hora | `new Date()` (sin zona horaria, fuente clásica de bugs) | `Instant.now()` (UTC explícito, del paquete `java.time`) |
+| Handler genérico | `catch (Exception e) { response.setStatus(500); PrintWriter w = ...; w.write("error"); }` en cada Controller | Un único `@ExceptionHandler(Exception.class)` en el `@RestControllerAdvice` — cubre TODA la aplicación |
+| Mapa JSON | `Map<String, Object> m = new HashMap<>(); m.put("id", id); m.put("status", "OK");` | `Map.of("id", id, "status", "OK")` (inmutable, 1 línea) |
+| Lanzar excepción de dominio | `throw new RuntimeException("Order not found: " + id)` (genérica → siempre 500) | `throw new ResourceNotFoundException("Order " + id + " not found")` (específica → 404) |
+
+### FAQ del Alumno
+
+- **¿Qué es `@RestControllerAdvice`?** Una anotación que marca una clase como "interceptora global" de excepciones para todos los `@RestController`. Es equivalente a `@ControllerAdvice + @ResponseBody`, lo que significa que su valor de retorno se serializa a JSON automáticamente.
+- **¿Por qué mi excepción no la captura el handler?** Verifica: (1) la clase está anotada con `@RestControllerAdvice`; (2) está en un paquete escaneado por Spring (bajo `com.springroadmap.exceptions`); (3) el `@ExceptionHandler` declara el tipo EXACTO o un padre de la excepción que se lanza.
+- **¿Por qué el test necesita `.setControllerAdvice(new GlobalExceptionHandler())`?** Porque en MockMvc `standaloneSetup` no hay contexto Spring, así que los `@RestControllerAdvice` no se registran solos. Hay que decírselo a MockMvc explícitamente.
+- **¿Por qué el handler genérico responde `"unexpected error"` y no `ex.getMessage()`?** Seguridad. El mensaje real podría revelar rutas de archivos, credenciales pegadas por error, nombres de tablas o cualquier otra información sensible. El detalle se guarda en el log del servidor con `log.error(..., ex)`, jamás en la respuesta al cliente.
+- **¿Qué es un `record`?** Una forma corta de declarar una clase inmutable en Java 14+. El compilador genera getters (con el mismo nombre que el campo, sin `get`), `equals`, `hashCode` y `toString` por ti.
+- **¿Qué diferencia hay entre 404 y 422?** 404 = "el recurso no existe" (el ID que pediste no está). 422 = "el recurso existe / el input es válido sintácticamente, pero viola una regla de negocio" (por ejemplo: id impar en nuestro ejemplo, o "el usuario ya está desactivado" en un caso real).
+- **¿Por qué `RuntimeException` y no `Exception`?** Porque `Exception` es checked (obliga a declararlas con `throws` o envolverlas en `try/catch`), lo que ensucia todo el código. Las excepciones de negocio siempre se modelan como unchecked (`RuntimeException`).
+
 ### Ejercicios
-1. Crea las excepciones `ResourceNotFoundException`, `DuplicateResourceException` y `BusinessRuleException` que hereden de una clase base `ApplicationException`.
-2. Crea un `ErrorResponse` record con los campos `status`, `error`, `errorCode`, `message`, `path`, `timestamp`.
-3. Implementa un `GlobalExceptionHandler` con handlers para las 3 excepciones custom + validación + catch-all genérico.
-4. En tu `UserService`, lanza `ResourceNotFoundException` cuando `findById` no encuentra al usuario.
-5. **(Avanzado)** Migra tu `GlobalExceptionHandler` para usar `ProblemDetail` (RFC 7807) en lugar de tu `ErrorResponse` custom.
+1. Añade una nueva excepción `DuplicateResourceException` que mapee a HTTP 409 Conflict y un handler para ella.
+2. Agrega un endpoint `POST /api/orders` que reciba un pedido y valide que el `id` no sea negativo (lanzar `BusinessRuleException` en caso contrario).
+3. Añade un `@ExceptionHandler(MethodArgumentNotValidException.class)` para devolver 400 con la lista de campos inválidos cuando se use `@Valid`.
+4. **(Avanzado)** Migra el `GlobalExceptionHandler` para responder con `ProblemDetail` (RFC 7807) en vez del record `ErrorResponse` custom.
 
 ### Cómo ejecutar
+
+**Con scripts portables (recomendado):**
+```powershell
+# PowerShell
+./build.ps1
+```
+```bash
+# Git Bash
+./build.sh
+```
+
+**Con Maven directo (requiere JDK 21 en JAVA_HOME):**
 ```bash
 cd 11-excepciones
-mvn spring-boot:run
+../apache-maven-3.9.16/bin/mvn clean package
+java -jar target/excepciones-1.0.0.jar
+```
 
-# Probar 404:
-curl http://localhost:8080/api/users/99999
+**Probar los endpoints:**
+```bash
+# 200 OK (id par):
+curl -i http://localhost:8080/api/orders/2
 
-# Probar 409 (duplicado):
-curl -X POST http://localhost:8080/api/users \
-  -H "Content-Type: application/json" \
-  -d '{"nombre":"Admin","email":"admin@test.com"}'
-# Enviar dos veces para ver el 409
+# 422 Unprocessable Entity (id impar - regla de negocio):
+curl -i http://localhost:8080/api/orders/1
+
+# 404 Not Found (id 0):
+curl -i http://localhost:8080/api/orders/0
+```
+
+Respuesta JSON de ejemplo para `GET /api/orders/1`:
+```json
+{
+  "code": "BUSINESS_RULE",
+  "message": "Odd order ids are not allowed: 1",
+  "timestamp": "2026-07-10T19:42:00Z",
+  "path": "/api/orders/1"
+}
 ```
 
 ### Archivos del Proyecto
 | Archivo | Propósito |
 |---------|-----------|
-| `exception/ApplicationException.java` | Clase base abstracta para todas las excepciones del dominio. |
+| `pom.xml` | Coordenadas Maven: `com.springroadmap:excepciones:1.0.0`, hereda de `spring-boot-starter-parent:4.1.0`. |
+| `build.sh` / `build.ps1` | Scripts portables que usan el JDK 21 y Maven de la raíz del roadmap. |
+| `src/main/resources/application.yml` | Config con hardening: nunca exponer stacktrace ni cabecera Server. |
+| `ExceptionsApplication.java` | Punto de entrada `@SpringBootApplication`. |
 | `exception/ResourceNotFoundException.java` | Excepción para recurso no encontrado → HTTP 404. |
-| `exception/DuplicateResourceException.java` | Excepción para recurso duplicado → HTTP 409. |
 | `exception/BusinessRuleException.java` | Excepción para regla de negocio violada → HTTP 422. |
-| `exception/GlobalExceptionHandler.java` | `@RestControllerAdvice` con todos los handlers. |
-| `dto/ErrorResponse.java` | Record con la estructura uniforme de errores. |
-| `service/UserService.java` | Servicio que lanza excepciones en casos de error. |
-| `controller/UserController.java` | Controller limpio sin try-catch. |
+| `exception/GlobalExceptionHandler.java` | `@RestControllerAdvice` con 3 handlers (404, 422, 500). |
+| `dto/ErrorResponse.java` | `record` con la estructura uniforme de errores. |
+| `controller/OrderController.java` | `GET /api/orders/{id}` — dispara las excepciones para demostrar el advice. |
+| `ExceptionsApplicationTests.java` | Smoke test `contextLoads`. |
+| `controller/OrderControllerTest.java` | MockMvc standalone con `.setControllerAdvice(new GlobalExceptionHandler())`. |
