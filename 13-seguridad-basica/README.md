@@ -247,13 +247,127 @@ curl -X POST http://localhost:8080/api/auth/register \
 curl -u admin:admin123 http://localhost:8080/api/users
 ```
 
-### Archivos del Proyecto
+### Archivos del Proyecto (implementación actual del módulo)
 | Archivo | Propósito |
 |---------|-----------|
-| `pom.xml` | Dependencia: `spring-boot-starter-security`. |
-| `config/SecurityConfig.java` | `SecurityFilterChain`, `PasswordEncoder`, `@EnableMethodSecurity`. |
-| `service/CustomUserDetailsService.java` | Implementación de `UserDetailsService` con JPA. |
-| `service/AuthService.java` | Registro de usuarios con BCrypt. |
-| `controller/AuthController.java` | Endpoints `/register` y `/login`. |
-| `domain/User.java` | Entidad con username, password y roles. |
-| `domain/Role.java` | Entidad/enum para roles (ADMIN, USER). |
+| `pom.xml` | Dependencias: web + `spring-boot-starter-security` + test + `spring-security-test`. |
+| `SeguridadBasicaApplication.java` | Clase principal con `@SpringBootApplication`. |
+| `config/SecurityConfig.java` | `SecurityFilterChain`, `UserDetailsService` in-memory y `BCryptPasswordEncoder`. |
+| `controller/PublicController.java` | `GET /api/public/hello` sin autenticación. |
+| `controller/PrivateController.java` | `GET /api/private/hello` protegido (Basic Auth). |
+| `application.yml` | Puerto 8080 + nivel de log de Security. |
+| `SeguridadBasicaApplicationTests.java` | Smoke test `contextLoads`. |
+| `SecurityIntegrationTest.java` | Tests con `@SpringBootTest(RANDOM_PORT)` + `TestRestTemplate` (público 200, privado 401/200/401). |
+| `build.sh` / `build.ps1` | Scripts de build con JDK 21 portable y Maven 3.9.16. |
+
+---
+
+### Antes vs Ahora — `web.xml` security-constraint vs `SecurityFilterChain` lambda DSL
+
+En Java EE clásico + Spring 3, la seguridad de URLs se declaraba en `web.xml`
+usando `<security-constraint>`. Con Spring Security 6/7 esto se declara en
+Java, con un DSL fluido basado en lambdas y un `@Bean SecurityFilterChain`.
+
+| Aspecto | ANTES (`web.xml`, Java EE + Spring 3/4) | AHORA (Spring Security 6/7, Java 21) |
+|---------|-----------------------------------------|---------------------------------------|
+| Ubicación | `WEB-INF/web.xml` (XML) | Clase `@Configuration` con `@Bean` |
+| Declaración de URL protegida | `<security-constraint><url-pattern>/api/private/*</url-pattern></security-constraint>` | `.requestMatchers("/api/private/**").authenticated()` |
+| Declaración de URL pública | Se dejaba fuera del `<security-constraint>` (o `<url-pattern>` separado con `<auth-constraint/>` vacío) | `.requestMatchers("/api/public/**").permitAll()` |
+| Método de auth | `<login-config><auth-method>BASIC</auth-method></login-config>` | `.httpBasic(Customizer.withDefaults())` |
+| Fuente de usuarios | `tomcat-users.xml`, `JAASRealm`, JDBCRealm | `@Bean UserDetailsService` (in-memory, JPA, LDAP, etc.) |
+| Passwords | A menudo texto plano en `tomcat-users.xml` | `BCryptPasswordEncoder` (hash con salt) |
+| Extensión clásica | `extends WebSecurityConfigurerAdapter` (Spring Security 5.6-) | `WebSecurityConfigurerAdapter` fue eliminado; sólo `@Bean SecurityFilterChain` |
+| Testing | Difícil: requería contenedor real | `@SpringBootTest(RANDOM_PORT) + TestRestTemplate.withBasicAuth(...)` |
+
+**Ejemplo comparativo:**
+
+```xml
+<!-- ANTES — web.xml -->
+<security-constraint>
+    <web-resource-collection>
+        <url-pattern>/api/private/*</url-pattern>
+    </web-resource-collection>
+    <auth-constraint>
+        <role-name>ADMIN</role-name>
+    </auth-constraint>
+</security-constraint>
+<login-config>
+    <auth-method>BASIC</auth-method>
+</login-config>
+<security-role>
+    <role-name>ADMIN</role-name>
+</security-role>
+```
+
+```java
+// AHORA — SecurityConfig.java
+@Bean
+public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    return http
+        .csrf(csrf -> csrf.disable())
+        .authorizeHttpRequests(auth -> auth
+            .requestMatchers("/api/public/**").permitAll()
+            .requestMatchers("/api/private/**").authenticated()
+            .anyRequest().authenticated())
+        .httpBasic(Customizer.withDefaults())
+        .build();
+}
+```
+
+---
+
+### FAQ del Alumno
+
+- **¿Qué es Basic Auth?** — Un esquema HTTP en el que el cliente envía la
+  cabecera `Authorization: Basic <base64(user:pass)>` en cada request.
+  Es simple pero requiere HTTPS obligatoriamente en producción, porque
+  base64 NO es cifrado (se puede revertir trivialmente).
+- **¿Por qué deshabilitamos CSRF?** — Porque nuestra API es stateless
+  (Basic Auth, sin sesión ni cookies). CSRF protege peticiones basadas
+  en cookies de sesión; sin cookies, no hay ataque CSRF que prevenir.
+- **¿Qué es un `SecurityFilterChain`?** — Es la lista ordenada de filtros
+  Servlet que Spring Security intercala delante de tus controllers para
+  autenticar, autorizar, gestionar sesión, CSRF, headers, etc.
+- **¿Por qué necesito un `PasswordEncoder` si guardo el usuario en memoria?** —
+  Porque Spring Security 6/7 obliga a declarar cómo se comparan las contraseñas.
+  Si guardaras `admin123` en plano lanzaría un error de "PasswordEncoder mapping".
+- **¿Qué significa 401 vs 403?** — 401 (Unauthorized) = "no sé quién eres, envía credenciales".
+  403 (Forbidden) = "sé quién eres pero no tienes permiso para este recurso".
+- **¿Por qué no usar MockMvc `standaloneSetup`?** — Porque `standaloneSetup`
+  monta solo el controller SIN la cadena de filtros de Spring Security.
+  Los tests darían 200 aunque la seguridad no funcione. Con `@SpringBootTest`
+  se arranca el contexto completo y los filtros se ejecutan de verdad.
+- **¿Qué es un `Principal`?** — Es la interfaz estándar de Java que
+  representa la identidad del usuario autenticado. Spring lo inyecta
+  automáticamente como argumento del método del controller.
+- **¿Puedo tener varios usuarios en memoria?** — Sí. `InMemoryUserDetailsManager`
+  acepta múltiples `UserDetails` en su constructor.
+
+---
+
+### Cómo ejecutar (módulo 13)
+
+```powershell
+# Windows PowerShell
+./build.ps1
+java -jar target/seguridad-basica-1.0.0.jar
+```
+
+```bash
+# Git Bash
+./build.sh
+java -jar target/seguridad-basica-1.0.0.jar
+```
+
+Prueba manual:
+
+```bash
+# Público → 200 "public"
+curl -i http://localhost:8080/api/public/hello
+
+# Privado sin auth → 401
+curl -i http://localhost:8080/api/private/hello
+
+# Privado con Basic Auth → 200 "private for admin"
+curl -i -u admin:admin123 http://localhost:8080/api/private/hello
+```

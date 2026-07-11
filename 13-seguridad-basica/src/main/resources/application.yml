@@ -1,0 +1,12 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: seguridad-basica
+
+# Log de Spring Security a nivel DEBUG durante el aprendizaje.
+# En producción cambiar a INFO o WARN para no filtrar información sensible.
+logging:
+  level:
+    org.springframework.security: INFO
