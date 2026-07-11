@@ -1,0 +1,26 @@
+# application.yml - Módulo 46 Feature Flags
+# Perfil default: todo APAGADO (código nuevo desplegado pero invisible).
+spring:
+  application:
+    name: feature-flags
+
+server:
+  port: 8080
+
+# Prefijo "features" mapeado por FeatureFlags @ConfigurationProperties
+features:
+  beta-checkout: false
+  new-search: false
+  custom:
+    promo-navidad: false
+    banner-verano: false
+
+# Actuator expone /health, /info y /env para inspeccionar flags en runtime.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,env,configprops
+  endpoint:
+    health:
+      show-details: always

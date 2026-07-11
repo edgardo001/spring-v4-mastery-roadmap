@@ -8,162 +8,155 @@ En un ciclo de desarrollo tradicional:
 1. El equipo termina una nueva funcionalidad (Ej: "Nueva pasarela de pago Stripe").
 2. Se hace un `merge` a `main` y se despliega a Producción.
 3. Se descubre un bug catastrófico. La empresa está perdiendo dinero.
-4. El equipo tiene que hacer un "Rollback", lo cual significa volver a compilar el código viejo, hacer un nuevo deploy, y rezar para que no haya conflictos de base de datos. Tardaron 30 minutos. Pérdida masiva.
+4. El equipo tiene que hacer un "Rollback": recompilar el código viejo, redeploy, rezar por conflictos de BD. 30 minutos. Pérdida masiva.
 
 ### Cómo lo resuelve
-Con **Feature Flags** (Interruptores de características), el código nuevo sube a Producción envuelto en un condicional `if (banderaEncendida)`.
-1. Subes el código a Producción, pero la bandera está `APAGADA` por defecto. Los usuarios no ven nada.
-2. El viernes por la tarde, entras a un panel de control (Ej: Unleash, Togglz, LaunchDarkly) y le das click a "Encender".
-3. Inmediatamente la funcionalidad está activa. Si hay un bug, le das click a "Apagar". La funcionalidad desaparece en **1 milisegundo**. Cero pánico, cero rollbacks, cero impacto.
+El código nuevo sube a Producción envuelto en `if (banderaEncendida)`. La bandera arranca **APAGADA**. Se enciende desde un panel en 1 milisegundo, y se apaga igual de rápido si algo sale mal.
 
 ### Por qué aprenderlo
-Las empresas TOP (Netflix, Amazon, Google) no usan ramas gigantescas (`feature-branches`) que duran meses. Usan **Trunk-Based Development**, donde todo se sube a `main` a diario, protegido por Feature Flags. Conocer esto te permite hacer integraciones continuas reales y seguras, así como **Canary Releases** (activar la pasarela de pagos solo para el 5% de los usuarios).
+Netflix, Amazon y Google usan **Trunk-Based Development**: todo el código va a `main` a diario, protegido por Feature Flags. Habilita **Canary Releases** (5% de usuarios) y A/B testing sin cambiar código.
 
 ```mermaid
 graph TD
-    A["Desarrollador hace Merge a Main"] --> B["Despliegue a Producción (Código Activo)"]
-    
-    C["Base de Datos de Flags<br/>(Panel Web / Unleash)"] -.->|Lee estado| D
-    
-    B --> D{"¿StripeFlag == ON?"}
-    
-    D -->|"Sí"| E["Mostrar Checkout Moderno con Stripe"]
-    D -->|"No"| F["Mostrar Checkout Viejo y Estable"]
-    
-    C -->|Botón OFF 🚨| D
-
+    A["Merge a main"] --> B["Deploy a Producción<br/>(código nuevo dormido)"]
+    C["Panel de Flags<br/>(YAML / DB / Unleash)"] -.->|lee estado| D
+    B --> D{"¿betaCheckout == ON?"}
+    D -->|Sí| E["Checkout Beta"]
+    D -->|No| F["Checkout Legacy"]
+    C -->|Botón OFF| D
     style C fill:#fcc419,color:#000
     style D fill:#339af0,color:#fff
 ```
 
 ---
 
+### Decisión de este módulo — Custom, sin Togglz
+Togglz 3.3.x tiene su starter compilado contra Spring Boot 3.x y **no está homologado para Boot 4.1.0** al momento de escribir este módulo (misma situación que Spring Cloud). Solución pragmática para aprender el concepto sin quedarnos bloqueados:
+
+- Implementación **custom** con `@ConfigurationProperties(prefix="features")`.
+- `FeatureFlagsService` centraliza `isEnabled(String flag)` y `setEnabled(String flag, boolean)`.
+- Endpoint `POST /admin/flags/{flag}?enabled=true` simula el panel de administración.
+- Actuator (`/actuator/env`, `/actuator/configprops`) expone el estado actual.
+
+En producción real usarías **Togglz** (cuando publiquen su versión para Boot 4), **Unleash** (open source, panel web + SDK) o **LaunchDarkly** (SaaS). Los conceptos que aprendes aquí se transfieren idénticos.
+
+---
+
 ### Glosario Básico
 
-#### `Feature Flag` (Feature Toggle)
-Una variable de configuración booleana (o de porcentaje) que puede ser cambiada dinámicamente sin reiniciar la aplicación, usada para activar o desactivar porciones de código.
-
-#### `Trunk-Based Development`
-Estrategia de Git donde los desarrolladores integran todo su código directamente a la rama `main` (trunk) varias veces al día, en vez de mantener ramas vivas por semanas. Todo el código sin terminar se esconde tras un Feature Flag.
-
-#### `Canary Release` / `A-B Testing`
-Estrategias avanzadas. Un Canary (Canario en la mina de carbón) implica encender el flag solo para un grupo de usuarios selectos (Ej: los del país Chile, o el 5% aleatorio del tráfico). Si algo sale mal, el 95% restante no fue afectado.
-
-#### `Unleash` / `Togglz` / `FF4J`
-Frameworks y productos dedicados a la gestión de Feature Flags. Spring Boot se integra maravillosamente con ellos.
+| Término | Explicación |
+|---|---|
+| **Feature Flag / Toggle** | Booleano que activa/desactiva código en runtime sin redeploy. |
+| **@ConfigurationProperties** | Anotación Spring que mapea un prefijo YAML a un POJO type-safe. |
+| **@RefreshScope** | Bean Cloud Context que se reconstruye al invocar `/actuator/refresh`. Aquí lo simulamos con `setEnabled` en memoria. |
+| **Trunk-Based Development** | Todo el equipo integra a `main` a diario; el WIP se esconde tras flags. |
+| **Canary Release** | Enciendes el flag para un porcentaje bajo de usuarios primero. |
+| **Kill Switch** | Un flag que apaga instantáneamente una feature con bug crítico. |
 
 ---
 
 ### Conceptos
 
-#### 1. Implementación Nativa de Spring (Uso de Togglz)
-- **Qué es** — Togglz es una librería Java open-source diseñada exactamente para este propósito.
-- **Código** — (Añadir dependencias en `pom.xml`):
-  ```xml
-  <dependency>
-      <groupId>org.togglz</groupId>
-      <artifactId>togglz-spring-boot-starter</artifactId>
-      <version>3.3.3</version>
-  </dependency>
-  <dependency>
-      <groupId>org.togglz</groupId>
-      <artifactId>togglz-console</artifactId> <!-- Para tener un panel web local -->
-  </dependency>
-  ```
-  **Declarar los Toggles como un Enum:**
-  ```java
-  public enum MyFeatures implements Feature {
-  
-      @Label("Nueva Interfaz de Pagos Stripe")
-      NEW_PAYMENT_GATEWAY,
-  
-      @EnabledByDefault
-      @Label("Notificaciones por SMS")
-      SMS_NOTIFICATIONS;
-  
-      public boolean isActive() {
-          return FeatureContext.getFeatureManager().isActive(this);
-      }
-  }
-  ```
+#### 1. `@ConfigurationProperties` type-safe vs `@Value`
+- **Qué es** — Mapear el bloque YAML `features:` a un POJO `FeatureFlags`.
+- **Por qué importa** — Autocompletado, refactor seguro, IDE lo detecta. `@Value("${features.beta-checkout}")` disperso por 20 clases es una pesadilla.
+- **Casos empresariales** — Cualquier configuración con más de 2 propiedades relacionadas.
 
-#### 2. Uso en el Código (Lógica de Negocio)
-- **Qué es** — Simplemente envolvemos las reglas de negocio en un if/else basado en el Enum.
-- **Código**:
-  ```java
-  @Service
-  public class PaymentService {
-  
-      public void processPayment(Order order) {
-          if (MyFeatures.NEW_PAYMENT_GATEWAY.isActive()) {
-              log.info("Procesando con la nueva pasarela (Stripe)");
-              // Lógica arriesgada y nueva...
-          } else {
-              log.info("Procesando con la pasarela vieja y confiable (Paypal)");
-              // Lógica de siempre...
-          }
-      }
-  }
-  ```
+#### 2. Servicio centralizado `FeatureFlagsService`
+- **Qué es** — Fachada que oculta la fuente de verdad de los flags.
+- **Por qué importa** — Cambiar YAML → Postgres → Unleash sin tocar controllers.
+- **Analogía** — El conserje del edificio que consulta el tablero eléctrico por ti.
 
-#### 3. Uso en Controladores (Endpoint Toggles)
-- **Qué es** — Quieres bloquear completamente un Endpoint para que nadie lo pueda usar a menos que el Flag esté activo.
-- **Código**:
-  ```java
-  @RestController
-  @RequestMapping("/api/beta")
-  public class BetaFeaturesController {
-  
-      @GetMapping("/reports")
-      public ResponseEntity<String> getReports() {
-          if (!MyFeatures.NEW_PAYMENT_GATEWAY.isActive()) {
-              // Devuelve 404 (Para el mundo, el endpoint simplemente no existe)
-              return ResponseEntity.notFound().build();
-          }
-          
-          return ResponseEntity.ok("Estos son los nuevos reportes!");
-      }
-  }
-  ```
+#### 3. Toggle en runtime sin redeploy
+- **Qué es** — `POST /admin/flags/betaCheckout?enabled=true` cambia el bean en memoria.
+- **Casos empresariales** — Panel de operaciones para desactivar la pasarela de pago Stripe si un partner cae.
 
-#### 4. Panel de Administración (Togglz Console)
-Togglz provee automáticamente una consola web en `http://localhost:8080/togglz-console`. Desde allí, cualquier persona de Producto (no un programador) puede entrar, ver los interruptores y encender o apagar funcionalidades en caliente. 
-
-*Nota Corporativa:* Por defecto, Togglz almacena el estado en memoria. En producción, debes conectarlo a una base de datos (Ej: Tabla `togglz` en PostgreSQL) a través de un `StateRepository` para que si tienes 5 microservicios idénticos, todos compartan el mismo estado de la bandera.
+#### 4. Perfiles Spring (`application-experiment.yml`)
+- Arrancar con `--spring.profiles.active=experiment` alza el flag betaCheckout en ON. Útil para entornos UAT.
 
 #### 5. Edge Cases y Errores Comunes
 
 | Error | Causa | Solución |
 |-------|-------|----------|
-| Deuda Técnica Acumulada | Han pasado 2 años y el código está lleno de `if (MyFeatures.NUEVO)`. Ya nadie usa el código viejo. | Los Feature Flags son **efímeros**. Una vez que el flag lleva 2 meses en producción 100% estable y activo, debes crear un Ticket técnico (Issue) para **eliminar el Flag**, borrar el código viejo (else) y dejar el código nuevo de forma permanente. |
-| Inconsistencia de Estado (Flaky Features) | Tienes 3 servidores (Nodos) corriendo la aplicación. Enciendes el flag y algunos usuarios lo ven y otros no. | Almacenaste el estado en memoria o en un archivo properties estático. Asegúrate de usar un repositorio centralizado de estado para los flags (Ej: Redis State Repository o JDBC State Repository). |
-| Flags de Base de Datos | Cambiaste el código con un Flag, pero ese código requería agregar una columna `NUEVA_COL` a la tabla. Si apagas el Flag, ¿qué pasa con la columna? | Los Flags **NO deshacen migraciones de base de datos** (Flyway). El código viejo debe ser capaz de ignorar columnas nuevas pacíficamente. Separa los cambios destructivos de DB (borrar tablas) de las migraciones de Features. |
+| Deuda técnica: código lleno de `if (flag)` viejos | Los flags son **efímeros**. Al cabo de meses ya nadie usa el `else`. | Ticket técnico obligatorio: "eliminar flag X y su rama muerta" a los 2 meses de estar 100% activo. |
+| Inconsistencia entre nodos | Cambiaste el flag en un nodo con `POST /admin/flags`, pero los otros 2 réplicas siguen en OFF. | Usa un **repositorio centralizado** (Redis, JDBC, Unleash). En este módulo simulamos con memoria — solo para demo local. |
+| Flags acoplados a migraciones de BD | El código nuevo lee una columna que no existe si el flag está OFF en un nodo viejo. | Los flags **no deshacen migraciones**. Diseña el código para tolerar columnas nuevas ausentes. |
+| Endpoint admin sin auth | `POST /admin/flags/...` público → cualquiera desactiva pagos. | Proteger con Spring Security + rol ADMIN en producción. |
+
+---
+
+### Antes vs Ahora (Java 8 → Java 21)
+
+| Tema | Antes (Java 8) | Ahora (Java 21) |
+|---|---|---|
+| Config typed | `@Value("${features.beta}") boolean beta;` disperso | POJO con `@ConfigurationProperties(prefix="features")` |
+| Rama sobre string | `if ("betaCheckout".equals(f)) { ... } else if (...)` | `switch (f) { case "betaCheckout" -> ...; default -> ...; }` |
+| Mapas literales | `Map<String,Boolean> m = new HashMap<String,Boolean>();` | `Map.of("promo-navidad", true)` (inmutable) o `new HashMap<>()` |
+| DTO respuesta | Clase POJO con getters/setters | `record CheckoutResponse(String mode) {}` |
+
+---
+
+### FAQ del Alumno
+
+- **¿Qué diferencia hay entre un Feature Flag y una variable de entorno?** Una env var suele requerir reiniciar el proceso para reflejarse. Un Feature Flag cambia en runtime sin reiniciar.
+- **¿Un `if (flag)` no es simplemente un `if`?** Sí, técnicamente. La magia está en que puedes cambiar el valor del flag desde fuera de la JVM, sin recompilar.
+- **¿Puedo tener flags no booleanos?** Sí: strings (`variant: "A" | "B" | "C"`) para A/B testing, ints (`rolloutPercent: 5`) para canarios.
+- **¿Qué es `@ConfigurationProperties`?** Una anotación que dice: "toma todas las claves YAML bajo este prefijo y ponlas en los campos de este POJO".
+- **¿Y `@RefreshScope`?** Un scope de Spring Cloud que reconstruye el bean cuando llamas `POST /actuator/refresh`. Aquí no dependemos de Spring Cloud, así que simulamos el mismo efecto con `setEnabled()`.
+- **¿Por qué el endpoint admin está sin autenticación?** Solo por simplicidad didáctica. En producción va detrás de Spring Security con rol ADMIN o incluso IP allowlist.
+- **¿Cuándo pasar de esto a Togglz/Unleash?** Cuando (a) necesitas panel web para gente no-dev, (b) tienes múltiples instancias que deben compartir estado, o (c) quieres targeting (por país, por usuario, por %).
 
 ---
 
 ### Ejercicios
-1. Crea un proyecto web y añade las dependencias de `togglz-spring-boot-starter` y `togglz-console`.
-2. Define un Enum `AppFlags` que implemente la interfaz `Feature`. Agrega un flag `PROMO_NAVIDAD`.
-3. Crea un `@RestController` que devuelva un saludo normal si el flag está inactivo, y un mensaje festivo si el flag está activo.
-4. Levanta la aplicación. Visita la consola en `/togglz-console`. Desactiva la seguridad de la consola temporalmente en tu `application.yml` (`togglz.console.secured=false`).
-5. Haz GET al endpoint y verifica el saludo normal. Luego en la consola, enciende `PROMO_NAVIDAD`, vuelve a hacer GET, y maravíllate viendo cómo cambió la lógica en tiempo real sin reiniciar Spring Boot.
+1. Añade un flag `newPricing` en `FeatureFlags` y otro endpoint `/api/pricing` que devuelva "old pricing" u "new pricing".
+2. Extiende `FeatureFlagsService.isEnabled` para aceptar targeting por header `X-User-Country` (solo Chile ve la beta).
+3. Escribe un test que active un flag del mapa `custom` (ej: `promo-navidad`) y verifique el comportamiento.
+4. Protege `/admin/flags/**` con un filtro que exija header `X-Admin-Token: secret`.
+5. Investiga Unleash: ¿cómo funciona su SDK Java y qué añadiría a este módulo?
+
+---
 
 ### Cómo ejecutar
 ```bash
-cd 46-feature-flags
-mvn spring-boot:run
+# Compilar y empaquetar
+./build.sh          # Git Bash
+./build.ps1         # PowerShell
 
-# Probar estado apagado
-curl http://localhost:8080/api/saludo
+# Correr el JAR
+java -jar target/feature-flags-1.0.0.jar
 
-# Abre tu navegador en http://localhost:8080/togglz-console y enciende el flag.
-# Vuelve a correr el comando curl.
+# O con Maven (dev)
+../apache-maven-3.9.16/bin/mvn spring-boot:run
+
+# Perfil experiment (beta activa desde el arranque)
+java -jar target/feature-flags-1.0.0.jar --spring.profiles.active=experiment
+
+# Probar (perfil default)
+curl http://localhost:8080/api/checkout
+# -> "legacy checkout"
+
+curl -X POST "http://localhost:8080/admin/flags/betaCheckout?enabled=true"
+curl http://localhost:8080/api/checkout
+# -> "beta checkout"
+
+# Inspeccionar el estado actual con Actuator
+curl http://localhost:8080/actuator/configprops | jq
 ```
 
+---
+
 ### Archivos del Proyecto
+
 | Archivo | Propósito |
-|---------|-----------|
-| `pom.xml` | Dependencias de Togglz Framework. |
-| `config/MyFeatures.java` | Definición centralizada del catálogo de Feature Flags. |
-| `controller/PromoController.java` | Lógica de bifurcación basada en el estado de la bandera. |
-| `application.yml` | Desactivar protección nativa del dashboard de Togglz para pruebas locales. |
+|---|---|
+| `pom.xml` | Dependencias (web + actuator + test). Boot 4.1.0 + Java 21. |
+| `src/main/java/.../FeatureFlagsApplication.java` | Entry point Spring Boot. |
+| `src/main/java/.../config/FeatureFlags.java` | POJO `@ConfigurationProperties(prefix="features")`. |
+| `src/main/java/.../service/FeatureFlagsService.java` | API central: `isEnabled` / `setEnabled`. |
+| `src/main/java/.../controller/CheckoutController.java` | `GET /api/checkout` + `POST /admin/flags/{flag}`. |
+| `src/main/resources/application.yml` | Defaults con todos los flags OFF + Actuator. |
+| `src/main/resources/application-experiment.yml` | Perfil con betaCheckout=true. |
+| `src/test/java/.../FeatureFlagsApplicationTests.java` | `contextLoads`. |
+| `src/test/java/.../controller/CheckoutControllerTest.java` | MockMvc standalone: OFF → legacy; después del POST → beta. |
+| `build.sh` / `build.ps1` | Scripts portables con JDK 21 + Maven 3.9.16 en la raíz del roadmap. |

@@ -1,0 +1,8 @@
+# application-experiment.yml - perfil "experiment"
+# Activar con: --spring.profiles.active=experiment
+# Aquí el flag betaCheckout arranca ENCENDIDO, útil para pruebas de UAT.
+features:
+  beta-checkout: true
+  new-search: false
+  custom:
+    promo-navidad: true
