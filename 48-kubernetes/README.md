@@ -193,3 +193,98 @@ kubectl get pods -w
 | `k8s/deployment.yml` | Despliegue de los Pods y configuración de Probes. |
 | `k8s/configmap.yml` | Inyección de propiedades como Variables de Entorno. |
 | `k8s/service.yml` | Balanceador de Carga nativo de Kubernetes. |
+
+---
+
+### Antes vs Ahora
+
+| Aspecto | Bare metal (JAR) | Docker (mod. 26) | Kubernetes (mod. 48) |
+|---------|------------------|------------------|----------------------|
+| Empaquetado | Fat-JAR local | Imagen Docker | Imagen Docker + manifiestos YAML |
+| Ejecucion | `java -jar` a mano | `docker run` a mano | `kubectl apply -f k8s/` |
+| Si el proceso muere | Nada. Alguien lo reinicia manualmente. | Nada (a menos que uses `--restart`). | El Deployment vuelve a crear el Pod automaticamente. |
+| Escalar a N replicas | Copiar/pegar JAR en N maquinas. | Correr N contenedores + balanceador externo. | `replicas: N` en el Deployment. |
+| Health checks | Ninguno estandar. | Solo "el proceso corre". | `livenessProbe` + `readinessProbe` HTTP contra Actuator. |
+| Config por entorno | Editar `application.yml` y redesplegar. | Variables `-e` en `docker run`. | ConfigMap + Secret inyectados como env vars. |
+| Networking entre servicios | IP + puerto hardcodeados. | Red Docker + nombres de contenedor. | Service (DNS interno) reemplaza a Eureka. |
+| Exposicion externa | Puerto abierto en firewall. | `-p 8080:8080`. | Ingress con hostname (`demo.local`). |
+
+---
+
+### Comandos de despliegue
+
+#### 1. Compilar y construir imagen
+
+```bash
+# Compila el fat-JAR (target/kubernetes-1.0.0.jar)
+./build.sh          # Linux/Mac
+.\build.ps1         # Windows PowerShell
+
+# Construye la imagen Docker local
+docker build -t kubernetes-demo:1.0.0 .
+```
+
+> Si usas Docker Desktop con Kubernetes activado, la imagen local es visible para el cluster.
+> Si usas `minikube`, primero: `eval $(minikube docker-env)` antes de `docker build`.
+
+#### 2. Aplicar manifiestos K8s planos
+
+```bash
+kubectl apply -f k8s/
+# equivalente a:
+kubectl apply -f k8s/configmap.yaml
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+kubectl apply -f k8s/ingress.yaml
+
+# Verificar
+kubectl get pods -w
+kubectl get svc
+kubectl describe deployment kubernetes-demo
+
+# Probar sin ingress
+kubectl port-forward svc/kubernetes-demo-service 8080:80
+curl http://localhost:8080/api/hello        # -> "Hello from K8s pod"
+curl http://localhost:8080/actuator/health/liveness
+curl http://localhost:8080/actuator/health/readiness
+
+# Limpiar
+kubectl delete -f k8s/
+```
+
+#### 3. Alternativa con Helm
+
+```bash
+helm install kubernetes-demo ./helm
+helm upgrade kubernetes-demo ./helm --set replicaCount=3
+helm uninstall kubernetes-demo
+```
+
+---
+
+### FAQ Alumno
+
+**¿Por que mis pods entran en `CrashLoopBackOff` apenas los aplico?**
+Casi siempre es que el `livenessProbe.initialDelaySeconds` es demasiado corto: Spring Boot tarda ~15-25s en arrancar y K8s lo mata antes. Aqui usamos `initialDelaySeconds: 30` en liveness precisamente por eso. Verifica con `kubectl logs <pod>` y `kubectl describe pod <pod>`.
+
+**¿Por que existen dos probes (liveness y readiness) y no una sola?**
+Son preguntas distintas. *Readiness*: "¿puedo mandarte trafico ya?" (Spring conecto a la BD, cache calentado). *Liveness*: "¿sigues vivo o estas colgado?". Si mezclas ambas, K8s podria reiniciar un pod que solo esta calentando y nunca terminaria de arrancar.
+
+**¿Por que `resources.limits.memory: 512Mi` y no dejar libre?**
+K8s aisla recursos por cgroups. Sin limite, un pod con leak se come toda la RAM del nodo y afecta a los vecinos. Con limite, K8s lo mata (`OOMKilled`) y crea uno nuevo. La flag `-XX:MaxRAMPercentage=75.0` en el Dockerfile hace que la JVM respete ese limite.
+
+**¿Por que la imagen usa `imagePullPolicy: IfNotPresent`?**
+Para desarrollo local (Docker Desktop / minikube) queremos que use la imagen local recien construida y NO intente ir a Docker Hub (donde no existe). En produccion usarias `Always` con un registry.
+
+**¿Por que el Service es `ClusterIP` y no `LoadBalancer`?**
+`ClusterIP` es interno al cluster: perfecto para que otros microservicios lo consuman. Para exponer al mundo real usamos `Ingress` (mas barato y flexible que `LoadBalancer`, que en la nube crea un balanceador de pago).
+
+**¿Que hace el `ConfigMap` con `SPRING_PROFILES_ACTIVE=prod`?**
+Spring Boot traduce variables de entorno con underscores a properties con puntos: `SPRING_PROFILES_ACTIVE` -> `spring.profiles.active`. Asi activas el perfil "prod" sin recompilar el JAR ni tocar `application.yml`.
+
+**¿Puedo saltarme Helm?**
+Si. Los manifiestos de `k8s/` funcionan sin Helm. Helm agrega valor cuando tienes que desplegar la misma app en dev/qa/prod cambiando solo unos valores (replicas, imagen, recursos). Para un solo entorno es sobreingenieria.
+
+**¿Por que `runAsNonRoot: true` en el Deployment y `USER spring` en el Dockerfile?**
+Defensa en profundidad. El `USER spring` del Dockerfile ya hace que el proceso corra como no-root. El `runAsNonRoot: true` de K8s se REHUSA a arrancar el pod si el UID resulta ser 0 (root), aunque alguien reconstruya la imagen mal. Es un cinturon + tirantes.
+

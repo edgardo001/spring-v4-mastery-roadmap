@@ -1,0 +1,39 @@
+# =========================================================
+# Modulo 48 - application.yml
+# =========================================================
+# Configuracion minima para que Actuator exponga los endpoints
+# que Kubernetes usa como probes:
+#   GET /actuator/health/liveness
+#   GET /actuator/health/readiness
+#
+# Antes (Modulo 26 - Docker): no habia probes; Docker solo sabia
+#   "el proceso Java esta corriendo o no". Podia estar colgado
+#   respondiendo 500 a todas las peticiones y Docker no reaccionaba.
+# Ahora (Modulo 48 - K8s): K8s consulta HTTP GET a estas rutas y
+#   decide reiniciar (liveness) o dejar de rutear (readiness).
+# =========================================================
+spring:
+  application:
+    name: kubernetes
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Exponemos health por HTTP para que K8s pueda consultarlo.
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        # Esta es LA linea clave del modulo 48.
+        # Activa /actuator/health/liveness y /actuator/health/readiness.
+        enabled: true
+      show-details: always
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true

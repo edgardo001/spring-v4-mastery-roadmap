@@ -1,0 +1,26 @@
+# =========================================================
+# Modulo 48 - k8s/service.yaml
+# =========================================================
+# Un Service ClusterIP crea una IP virtual y un nombre DNS interno
+# (kubernetes-demo-service) que enruta trafico a cualquier Pod que
+# tenga el label app=kubernetes-demo. Reemplaza a Eureka dentro
+# del cluster.
+#
+# port: 80 es el puerto expuesto por el Service.
+# targetPort: 8080 es el puerto donde escucha Spring Boot dentro del pod.
+# =========================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubernetes-demo-service
+  labels:
+    app: kubernetes-demo
+spec:
+  type: ClusterIP
+  selector:
+    app: kubernetes-demo
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8080

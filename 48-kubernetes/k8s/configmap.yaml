@@ -1,0 +1,17 @@
+# =========================================================
+# Modulo 48 - k8s/configmap.yaml
+# =========================================================
+# Un ConfigMap almacena pares clave/valor NO sensibles (para
+# contrasenas usa Secret). Aqui exponemos SPRING_PROFILES_ACTIVE=prod
+# y el Deployment lo inyecta via envFrom.configMapRef.
+#
+# Spring Boot traduce automaticamente esta variable de entorno a la
+# propiedad spring.profiles.active=prod, activando el perfil "prod"
+# sin recompilar el JAR.
+# =========================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubernetes-demo-config
+data:
+  SPRING_PROFILES_ACTIVE: "prod"

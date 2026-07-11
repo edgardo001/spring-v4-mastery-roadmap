@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Modulo 48 - Kubernetes.
+    Aplicacion Spring Boot minima que se contenedoriza y se despliega
+    a un cluster de Kubernetes. Aqui el POM solo produce un fat-JAR con
+    Actuator + Web. La "orquestacion" (replicas, probes, service, ingress,
+    configmap) vive en los manifiestos de la carpeta k8s/ y opcionalmente
+    en el chart de Helm de la carpeta helm/.
+
+    Habilitamos Actuator para exponer:
+      - GET /actuator/health/liveness   (Kubernetes livenessProbe)
+      - GET /actuator/health/readiness  (Kubernetes readinessProbe)
+
+    Antes vs Ahora:
+      Modulo 26 (Docker): "docker run" arrancaba UN contenedor. Si moria,
+        no volvia solo. No habia probes: Docker no sabe si el proceso Java
+        internamente esta "listo" o "vivo".
+      Modulo 48 (K8s): un Deployment mantiene N replicas vivas, y K8s
+        pregunta activamente a /actuator/health/liveness y /readiness para
+        reiniciar o dejar de rutear trafico segun corresponda.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.springroadmap</groupId>
+    <artifactId>kubernetes</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>kubernetes</name>
+    <description>Modulo 48 - Despliegue en Kubernetes con probes de Actuator</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- Web: controlador REST /api/hello -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Actuator: expone /actuator/health/liveness y /readiness que K8s consulta -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Test: JUnit 5 + MockMvc standalone -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!--
+            finalName fija target/kubernetes-1.0.0.jar.
+            Es el nombre que copia el Dockerfile en la stage runtime.
+        -->
+        <finalName>kubernetes-1.0.0</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

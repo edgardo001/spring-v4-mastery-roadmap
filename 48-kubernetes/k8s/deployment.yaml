@@ -1,0 +1,74 @@
+# =========================================================
+# Modulo 48 - k8s/deployment.yaml
+# =========================================================
+# Un "Deployment" declara el estado deseado: 2 replicas de la app,
+# usando la imagen "kubernetes-demo:1.0.0", con probes de salud y
+# limites de recursos. K8s se encargara de que ese estado siempre
+# se cumpla (self-healing).
+#
+# Antes (Docker suelto): 1 contenedor. Si moria, moria.
+# Ahora (K8s Deployment): si un pod muere, K8s crea otro en segundos.
+# =========================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubernetes-demo
+  labels:
+    app: kubernetes-demo
+spec:
+  # 2 replicas: si una cae, la otra sigue sirviendo trafico.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kubernetes-demo
+  template:
+    metadata:
+      labels:
+        app: kubernetes-demo
+    spec:
+      # securityContext a nivel de pod: refuerza que NINGUN contenedor
+      # del pod puede correr como root. Debe coincidir con USER spring
+      # del Dockerfile.
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: kubernetes-demo
+          image: kubernetes-demo:1.0.0
+          # imagePullPolicy IfNotPresent para pruebas locales con
+          # Docker Desktop / minikube (no intenta ir a un registry).
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          # Inyeccion desde ConfigMap: SPRING_PROFILES_ACTIVE=prod.
+          envFrom:
+            - configMapRef:
+                name: kubernetes-demo-config
+          # ---------- Health probes ----------
+          # Liveness: "¿estas vivo?". Si falla, K8s reinicia el contenedor.
+          # initialDelaySeconds=30 le da tiempo a Spring Boot a arrancar
+          # sin caer en CrashLoopBackOff.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          # Readiness: "¿listo para recibir trafico?". Si falla, K8s NO
+          # mata el pod, solo deja de mandarle peticiones.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          # ---------- Recursos ----------
+          # requests: lo que K8s RESERVA para este contenedor (usa esto
+          #   para decidir en que nodo cabe).
+          # limits: el techo. Si excede memory, K8s lo mata (OOMKilled).
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

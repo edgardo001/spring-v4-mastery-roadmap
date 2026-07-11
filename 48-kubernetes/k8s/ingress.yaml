@@ -1,0 +1,27 @@
+# =========================================================
+# Modulo 48 - k8s/ingress.yaml
+# =========================================================
+# Un Ingress expone HTTP hacia afuera del cluster mapeando un host
+# (demo.local) al Service interno. En Docker Desktop / minikube
+# necesitas un ingress controller (por ejemplo nginx-ingress) y
+# agregar "127.0.0.1 demo.local" a tu archivo hosts.
+# =========================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kubernetes-demo-ingress
+  annotations:
+    # Reescribe la ruta que llega al backend (opcional segun controller).
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+    - host: demo.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kubernetes-demo-service
+                port:
+                  number: 80
