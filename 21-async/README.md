@@ -195,19 +195,57 @@ Un grupo de hilos reciclables que Spring usa para ejecutar las tareas. Es mejor 
 3. Observa en los logs el nombre del hilo: verás `http-nio-8080-exec` en la parte web y `task-1` (o tu prefijo custom) en la parte asíncrona.
 4. **(Avanzado)** Modifica tu clase `@Configuration` para usar un Thread Pool con cola límite de 1, inyéctale 10 peticiones asíncronas de golpe y observa cómo el `CallerRunsPolicy` hace que el hilo principal tenga que ayudar.
 
+### Antes vs Ahora (Java 8 → Java 21)
+
+| Concepto | ANTES (Java 8 clásico) | AHORA (Java 21 + Spring 4) |
+|---|---|---|
+| Lanzar tarea en background | `new Thread(runnable).start()` | `@Async` + método que retorna `CompletableFuture<T>` |
+| Esperar N tareas | Compartir arrays + `Thread.join()` | `CompletableFuture.allOf(f1, f2).join()` |
+| Encadenar transformación | Callbacks anidados | `future.thenApply(x -> ...)` |
+| Timeout en la espera | Lógica manual con `wait/notify` | `future.get(5, TimeUnit.SECONDS)` |
+| Pool de hilos | `Executors.newFixedThreadPool(5)` | `@Bean ThreadPoolTaskExecutor` + `@Async("taskExecutor")` |
+
+### FAQ del Alumno
+
+- **¿Qué es un "hilo" (thread)?** — Una línea de ejecución dentro del programa. Tu JVM puede tener muchas líneas ejecutándose "a la vez" para no bloquearse cuando una está esperando algo lento (red, disco).
+- **¿Qué hace exactamente `@Async`?** — Le dice a Spring "cuando alguien llame a este método, no lo ejecutes en el hilo del que llama; despáchalo a un pool de hilos y devuelve el control inmediatamente".
+- **¿Por qué necesito `@EnableAsync`?** — Sin ella, `@Async` es un simple comentario decorativo. `@EnableAsync` es el interruptor que activa el motor AOP que crea los proxies de asincronía.
+- **¿Qué es un `CompletableFuture`?** — Una "promesa" de valor. Al momento de llamar al método, el valor todavía no existe; el objeto te lo entregará cuando la tarea termine (`.get()`) o te avisará (`.thenAccept(...)`).
+- **¿Por qué no puedo llamar al método `@Async` desde la MISMA clase?** — Porque Spring intercepta las llamadas mediante un proxy que envuelve al bean. Si te llamas a ti mismo (`this.metodo()`) esquivas el proxy y pierdes la asincronía. Regla: los métodos `@Async` viven en un `@Service` aparte y se inyectan.
+- **¿Qué pasa si el pool se llena?** — Depende de la `RejectedExecutionHandler`. En este módulo usamos `CallerRunsPolicy`: el hilo de Tomcat ejecuta la tarea él mismo. Ralentiza al servidor pero no pierde trabajo.
+- **¿Por qué `.get(5, SECONDS)` y no `.get()`?** — `.get()` sin timeout bloquea indefinidamente. En un endpoint web eso agota hilos Tomcat y tumba el servidor. Siempre timeout explícito.
+- **¿Por qué el test del controller mockea el service en vez de arrancar Spring?** — Porque queremos una prueba unitaria rápida. El comportamiento asíncrono real ya está cubierto por `EmailServiceTest` (que sí usa `@SpringBootTest`).
+
 ### Cómo ejecutar
+
 ```bash
+# Con los scripts portables (JDK + Maven en la raíz del roadmap):
 cd 21-async
+./build.sh          # Git Bash
+# o
+.\build.ps1         # PowerShell
+
+# Ejecutar el JAR:
+java -jar target/async-1.0.0.jar
+
+# O modo dev con Maven:
 mvn spring-boot:run
 
-# Notarás que el servidor no se bloquea y responde rápido
-curl -X POST http://localhost:8080/api/users
+# Prueba manual:
+curl -X POST "http://localhost:8080/api/emails?to=ada@x.com"
+# Respuesta esperada: SENT:ada@x.com
 ```
 
 ### Archivos del Proyecto
 | Archivo | Propósito |
 |---------|-----------|
-| `config/AsyncConfig.java` | `@EnableAsync` y configuración del `ThreadPoolTaskExecutor`. |
-| `service/EmailService.java` | Tarea Fire-and-Forget anotada con `@Async`. |
-| `service/ReportService.java` | Tareas que devuelven `CompletableFuture`. |
-| `controller/AsyncController.java` | Endpoint que consume y paraleliza tareas. |
+| `pom.xml` | Coordenadas Maven + dependencias web y test. |
+| `build.sh` / `build.ps1` | Scripts portables (JDK 21 + Maven 3.9.16 en la raíz). |
+| `src/main/resources/application.yml` | Puerto 8080 + hardening de errores. |
+| `AsyncApplication.java` | Clase `main` con `@SpringBootApplication`. |
+| `config/AsyncConfig.java` | `@EnableAsync` + `@Bean("taskExecutor")` (core=2, max=5, queue=10, CallerRunsPolicy). |
+| `service/EmailService.java` | `@Async("taskExecutor") CompletableFuture<String> sendEmail(String)`. |
+| `controller/EmailController.java` | `POST /api/emails?to=X` que espera hasta 5 s el resultado. |
+| `AsyncApplicationTests.java` | Smoke test `contextLoads`. |
+| `service/EmailServiceTest.java` | `@SpringBootTest`: verifica retorno `SENT:ada@x.com`. |
+| `controller/EmailControllerTest.java` | MockMvc standalone + service mockeado con `CompletableFuture.completedFuture(...)`. |

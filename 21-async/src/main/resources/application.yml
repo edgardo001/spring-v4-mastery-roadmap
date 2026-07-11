@@ -1,0 +1,19 @@
+# application.yml del módulo 21. Reutiliza el hardening de módulos previos:
+# no filtrar stacktraces al cliente, sin cabecera Server, logs INFO+DEBUG local.
+server:
+  port: 8080
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+    include-exception: false
+  server-header: ""
+
+spring:
+  application:
+    name: async
+
+logging:
+  level:
+    root: INFO
+    com.springroadmap: DEBUG
