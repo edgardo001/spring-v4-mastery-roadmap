@@ -1,0 +1,58 @@
+# docker-compose OPCIONAL para probar el stack de observabilidad end-to-end.
+#
+# Servicios:
+#   - loki:    almacena logs JSON (recibe via HTTP push).
+#   - tempo:   backend de trazas OpenTelemetry / Zipkin.
+#   - grafana: UI unificada para logs + trazas + metricas.
+#   - prometheus: scrapea /actuator/prometheus del host.
+#
+# Uso:
+#   docker compose up -d
+#   # arrancar la app localmente:  java -jar target/observabilidad-1.0.0.jar
+#   # abrir http://localhost:3000 (grafana, admin/admin)
+#
+# En un escenario real la app enviaria trazas a Tempo via OTLP y los logs
+# a Loki via un promtail / logging appender adicional. Este compose es solo
+# esqueleto ilustrativo del modulo.
+
+version: "3.9"
+
+services:
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: obs-prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    volumes:
+      - ./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  loki:
+    image: grafana/loki:latest
+    container_name: obs-loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: obs-tempo
+    ports:
+      - "3200:3200"   # tempo query
+      - "4317:4317"   # OTLP gRPC
+    command: ["-config.file=/etc/tempo.yaml"]
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: obs-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    depends_on:
+      - prometheus
+      - loki
+      - tempo

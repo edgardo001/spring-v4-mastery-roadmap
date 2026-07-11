@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Configuracion de Logback para el modulo 45.
+
+    Objetivo: emitir cada linea de log como un objeto JSON de una sola linea
+    (formato ideal para Loki / Elasticsearch / Datadog / CloudWatch).
+
+    Elementos clave:
+      - LogstashEncoder: convierte el LoggingEvent en JSON.
+      - includeMdcKeyName traceId / spanId: los expone como campos top-level
+        del JSON en lugar de meterlos dentro del sub-objeto "mdc".
+      - customFields: agrega un tag "app" fijo a cada evento.
+
+    Micrometer Tracing pone automaticamente traceId y spanId en el MDC de SLF4J,
+    por eso basta con incluirlos aqui para que aparezcan en el JSON.
+-->
+<configuration>
+
+    <springProperty scope="context" name="appName" source="spring.application.name" defaultValue="observabilidad"/>
+
+    <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <!-- Incluir campos MDC como campos top-level del JSON. -->
+            <includeMdcKeyName>traceId</includeMdcKeyName>
+            <includeMdcKeyName>spanId</includeMdcKeyName>
+            <customFields>{"app":"${appName}"}</customFields>
+            <timeZone>UTC</timeZone>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="JSON_CONSOLE"/>
+    </root>
+
+    <!-- Logs de nuestro paquete a DEBUG para ver el ciclo completo del request. -->
+    <logger name="com.springroadmap.observability" level="INFO"/>
+
+</configuration>

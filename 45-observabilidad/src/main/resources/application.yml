@@ -1,0 +1,28 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: observabilidad
+
+# Actuator + Prometheus + Tracing
+# - Exponemos health, metrics, prometheus e info.
+# - management.tracing.sampling.probability=1.0 => muestreamos el 100% de los requests
+#   (en produccion tipicamente 0.1 o menor para no saturar el backend de trazas).
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus,info
+  endpoint:
+    health:
+      show-details: always
+  tracing:
+    sampling:
+      probability: 1.0
+  metrics:
+    tags:
+      application: observabilidad-demo
+
+# Nota: el patron de logs se controla desde logback-spring.xml.
+# No hace falta configurar logging.pattern.level aqui: LogstashEncoder emite JSON.
