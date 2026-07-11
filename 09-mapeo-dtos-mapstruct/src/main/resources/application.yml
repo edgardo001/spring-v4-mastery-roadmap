@@ -1,0 +1,46 @@
+# application.yml del modulo 09.
+# Mantiene el hardening acumulado del roadmap y anade H2 in-memory
+# (recordar: en produccion se cambia a PostgreSQL/MySQL con Flyway).
+
+server:
+  port: 8080
+  error:
+    # Ningun stacktrace, mensaje, ni excepcion se filtra al cliente.
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+    include-exception: false
+  # Oculta la cabecera Server: para no publicar la version de Tomcat/Spring.
+  server-header: ""
+
+spring:
+  application:
+    name: mapeo-dtos-mapstruct
+
+  # DataSource H2 - base de datos en memoria. Se destruye al apagar la app.
+  datasource:
+    url: jdbc:h2:mem:employeesdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+  jpa:
+    hibernate:
+      # 'create-drop' es aceptable SOLO en dev/tests (H2 en memoria).
+      # En produccion: 'validate' o 'none' + Flyway/Liquibase.
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: false
+    open-in-view: false   # Evita LazyInitializationException disfrazadas.
+
+  # Consola H2 deshabilitada por seguridad (si se quisiera activar seria bajo /h2-console).
+  h2:
+    console:
+      enabled: false
+
+logging:
+  level:
+    root: INFO
+    com.springroadmap: DEBUG

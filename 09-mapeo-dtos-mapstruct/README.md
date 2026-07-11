@@ -250,6 +250,38 @@ public interface UserMapper {
 
 ---
 
+### Antes vs Ahora (Java 8 → Java 21 + MapStruct)
+
+Tabla comparativa aplicada al mapeo Entity ↔ DTO de este módulo.
+
+| Aspecto | ANTES (Java 8, mapeo manual) | AHORA (Java 21 + MapStruct 1.6) |
+|---------|------------------------------|---------------------------------|
+| Definición del DTO | `public class EmployeeResponse { private Long id; ... 8 getters + 8 setters + equals + hashCode + toString }` | `public record EmployeeResponse(Long id, String fullName, BigDecimal salary, LocalDate hireDate) { }` |
+| Mutabilidad | DTO mutable (cualquiera puede llamar `setSalary(...)`) | `record` inmutable por diseño |
+| Código de conversión Entity → DTO | 5+ líneas escritas a mano por método, un método por dirección | Una interfaz + una anotación `@Mapping`; MapStruct genera `EmployeeMapperImpl` en `target/generated-sources` |
+| Concatenar `fullName` | `r.setFullName(e.getFirstName() + " " + e.getLastName());` disperso en el controller | `@Mapping(target="fullName", expression="java(e.getFirstName()+\" \"+e.getLastName())")` centralizado en el mapper |
+| Ocultar campos sensibles | Recordar NO copiar `internalNotes` en cada mapper (frágil) | El DTO simplemente no declara `internalNotes` → físicamente imposible que salga |
+| Rendimiento | Reflexión (ModelMapper) o código manual | Código Java plano generado en compile-time, cero reflexión |
+| Detección de errores | En producción (`NullPointerException`) | En compilación (`unmappedTargetPolicy=ERROR` falla el build) |
+| Inyección | `@Autowired` en campo | Constructor injection con `final` (más testable, sin dependencia de Spring en el mapper generado) |
+| Dinero | `double salary` (errores de redondeo) | `BigDecimal salary` (precisión exacta, obligatorio para plata) |
+| Fecha | `java.util.Date hireDate` (con zona horaria implícita) | `java.time.LocalDate hireDate` (thread-safe, sin zona horaria) |
+| Iteración lista | `for(Employee e : list){ out.add(mapper.toResponse(e)); }` | `list.stream().map(mapper::toResponse).toList()` |
+
+### FAQ del Alumno
+
+- **¿Qué es MapStruct exactamente?** Es un procesador de anotaciones. Al compilar el proyecto, mira las interfaces anotadas con `@Mapper` y genera automáticamente una clase Java que las implementa. Después de `mvn compile`, puedes ver el archivo generado en `target/generated-sources/annotations/com/springroadmap/dtos/mapper/EmployeeMapperImpl.java`.
+- **¿Dónde está la implementación de `EmployeeMapper`? Solo veo la interfaz.** MapStruct la genera en tiempo de compilación. No la escribes tú. Spring la registra como `@Component` porque el mapper usa `componentModel = "spring"`.
+- **¿Qué es un `record`?** Una clase especial de Java 14+ diseñada para transportar datos. Genera automáticamente el constructor, los accessors (nota: `response.fullName()`, sin el prefijo `get`), `equals`, `hashCode` y `toString`. Es inmutable: una vez creado no se puede modificar.
+- **¿Por qué la Entity no es un record?** JPA/Hibernate necesita un constructor sin argumentos y setters para instanciar la entidad al leer filas de la base de datos. Los records son inmutables, así que no sirven como Entity.
+- **¿Por qué no expongo la Entity directamente en el REST?** Porque contiene datos sensibles (`internalNotes`), porque un cambio en la BD rompería el contrato del API, y porque las relaciones lazy explotarían al serializar a JSON. El DTO es un contrato limpio y estable.
+- **¿Qué diferencia hay entre `EmployeeRequest` y `EmployeeResponse`?** El primero es lo que ENTRA (POST). No tiene `id` (lo genera la BD) ni `internalNotes` (el cliente no puede escribirlo). El segundo es lo que SALE (GET/POST response). Tiene `id` y `fullName` concatenado, pero no `internalNotes`.
+- **¿Qué hace `expression = "java(...)"` en `@Mapping`?** Le dice a MapStruct que en lugar de copiar un campo por nombre, ejecute ese fragmento de código Java para calcular el valor. Aquí lo usamos para concatenar `firstName + " " + lastName`.
+- **¿Qué es `annotationProcessorPaths` en el `pom.xml`?** Es la sección donde le decimos a `javac` qué procesadores de anotaciones debe ejecutar durante la compilación. Sin esto, MapStruct no se activa y la implementación no se genera.
+- **¿Por qué mis campos salen `null` después de mapear?** Casi siempre porque los nombres de campo no coinciden entre origen y destino. Solución: usa `@Mapping(source="a", target="b")` para hacer el mapeo explícito. Con `unmappedTargetPolicy=ERROR` el compilador te avisa.
+- **¿Puedo usar Lombok junto con MapStruct?** Sí, pero necesitas agregar `lombok-mapstruct-binding` en `annotationProcessorPaths` para que ambos procesadores cooperen. En este módulo NO usamos Lombok (regla del roadmap: constructor injection sin Lombok).
+- **¿Cómo pruebo el mapper sin arrancar Spring?** Usando `Mappers.getMapper(EmployeeMapper.class)`. Devuelve una instancia de la implementación generada, sin necesidad de contexto Spring. Ideal para tests unitarios rápidos.
+
 ### Ejercicios
 1. Crea una Entity `Product` con campos `id`, `name`, `price`, `internalCost`, `supplier`. Crea un DTO `ProductResponse` que **no incluya** `internalCost` ni `supplier`.
 2. Implementa un `ProductMapper` con MapStruct que convierta `Product → ProductResponse`.
@@ -261,14 +293,23 @@ public interface UserMapper {
 ```bash
 cd 09-mapeo-dtos-mapstruct
 
-# Compilar primero (MapStruct genera las implementaciones aquí)
-mvn clean compile
+# Opción 1: script portable (usa JDK 21 y Maven 3.9.16 de la raíz del roadmap)
+./build.sh          # Git Bash
+# .\build.ps1       # PowerShell
 
-# Verificar que se generó el MapperImpl
-ls target/generated-sources/annotations/com/springroadmap/ejemplo/mapper/
+# Verificar que MapStruct generó la implementación:
+ls target/generated-sources/annotations/com/springroadmap/dtos/mapper/EmployeeMapperImpl.java
 
-# Ejecutar la aplicación
-mvn spring-boot:run
+# Ejecutar el JAR ejecutable resultante
+java -jar target/mapeo-dtos-mapstruct-1.0.0.jar
+
+# Probar endpoints
+curl -X POST http://localhost:8080/api/employees \
+     -H "Content-Type: application/json" \
+     -d '{"firstName":"Ada","lastName":"Lovelace","salary":1500.00,"hireDate":"2024-01-15"}'
+
+curl http://localhost:8080/api/employees
+curl http://localhost:8080/api/employees/1
 ```
 
 ### Archivos del Proyecto

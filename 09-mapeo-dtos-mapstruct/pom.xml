@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    pom.xml del módulo 09 - Mapeo Entity <-> DTO con MapStruct.
+
+    Coordenadas homogéneas del roadmap:
+      groupId   = com.springroadmap
+      artifactId= mapeo-dtos-mapstruct
+      version   = 1.0.0
+      finalName = mapeo-dtos-mapstruct-1.0.0  -> target/mapeo-dtos-mapstruct-1.0.0.jar
+
+    Novedad respecto a módulos previos:
+      - Se agrega MapStruct 1.6.3 como dependencia de runtime (interfaz @Mapper)
+        y como "annotation processor" (genera EmployeeMapperImpl.java al compilar).
+      - Se configura maven-compiler-plugin con <annotationProcessorPaths> para
+        que javac descubra el processor de MapStruct durante `mvn compile`.
+
+    ANTES (Java 8 + POM clasico):
+      El desarrollador escribia a mano un EmployeeMapper.java con getters/setters:
+        Employee toEntity(EmployeeRequest r) {
+            Employee e = new Employee();
+            e.setFirstName(r.getFirstName());
+            e.setLastName(r.getLastName());
+            ...
+        }
+      Cada nuevo campo obligaba a tocar 2 lugares (mapper + tests).
+
+    AHORA (Java 21 + MapStruct):
+      Se declara una interfaz y MapStruct genera la implementacion en compile-time.
+      Sin reflexion, sin overhead en runtime, y con errores detectados por el compilador.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.springroadmap</groupId>
+    <artifactId>mapeo-dtos-mapstruct</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>mapeo-dtos-mapstruct</name>
+    <description>Modulo 09 - Mapeo Entity/DTO con MapStruct 1.6</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Version del procesador y de la libreria MapStruct. Deben coincidir. -->
+        <mapstruct.version>1.6.3</mapstruct.version>
+    </properties>
+
+    <dependencies>
+        <!-- Spring Web: expone el EmployeeController como REST API. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Spring Data JPA: EmployeeRepository extiende JpaRepository. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!-- H2 in-memory: base de datos embebida para poder ejecutar el modulo sin instalar nada. -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!--
+            MapStruct - libreria (runtime).
+            Provee las anotaciones @Mapper, @Mapping y la interfaz Mappers.
+        -->
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+            <version>${mapstruct.version}</version>
+        </dependency>
+
+        <!-- Test starter (JUnit 5, MockMvc, AssertJ). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>mapeo-dtos-mapstruct-1.0.0</finalName>
+        <plugins>
+            <!--
+                Compiler plugin con annotationProcessorPaths.
+
+                IMPORTANTE: en Spring Boot 4.1.0 el parent ya define la version del plugin.
+                Aqui SOLO agregamos la configuracion de annotationProcessorPaths para
+                que javac descubra al processor de MapStruct.
+
+                Sin esto, MapStruct NO genera EmployeeMapperImpl.java y al arrancar la
+                app se veria el error:
+                    "No implementation was created for EmployeeMapper"
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.mapstruct</groupId>
+                            <artifactId>mapstruct-processor</artifactId>
+                            <version>${mapstruct.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                    <compilerArgs>
+                        <!-- Le dice a MapStruct que use el modelo de componentes Spring
+                             (aunque tambien se indica con @Mapper(componentModel="spring")). -->
+                        <arg>-Amapstruct.defaultComponentModel=spring</arg>
+                        <!-- Falla la compilacion si un campo del DTO destino no fue mapeado. -->
+                        <arg>-Amapstruct.unmappedTargetPolicy=ERROR</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+
+            <!-- Empaqueta el fat-jar ejecutable. -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
