@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: spring-aop
+
+server:
+  port: 8080
+
+# Logging: nivel INFO para ver los mensajes del aspecto.
+logging:
+  level:
+    com.springroadmap.aop: INFO
+    org.springframework.aop: INFO

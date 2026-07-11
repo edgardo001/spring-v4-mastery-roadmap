@@ -198,20 +198,79 @@ El código real que se ejecutará en el Pointcut. Tipos principales:
 4. Aplica tu anotación en algún controlador o servicio: `@AuditarAccion(accion = "ELIMINAR_USUARIO")`.
 5. Ejecuta y comprueba que, sin escribir lógica dentro del servicio, los logs de auditoría aparecen correctamente.
 
+### Antes vs Ahora (Decorator manual vs `@Aspect`)
+
+| Aspecto | ANTES (Decorator Pattern manual) | AHORA (`@Aspect` + `@Around`) |
+|---------|----------------------------------|-------------------------------|
+| Añadir logging a 50 métodos | Envolver cada método a mano o crear 50 clases decoradoras | Anotar los métodos con `@Loggable`. El aspecto se aplica solo. |
+| Contar llamadas | Contador manual dentro de cada método (`counter++`) | `AtomicInteger` en el aspecto, invisible al servicio |
+| Cambiar formato del log | Editar los 50 métodos | Editar 1 archivo (`LoggingAspect`) |
+| SRP (Single Responsibility) | Roto: servicio hace negocio + logging | Cumplido: servicio hace negocio, aspecto hace logging |
+| Sintaxis Java | Interfaz + `implements` + `super.metodo()` | `@Around("@annotation(...Loggable)")` + `pjp.proceed()` |
+
+**Comparación de código:**
+
+```java
+// ANTES — Decorator manual
+public class CalculatorLoggingDecorator implements Calculator {
+    private final Calculator delegate;
+    private final AtomicInteger count = new AtomicInteger();
+    public CalculatorLoggingDecorator(Calculator d) { this.delegate = d; }
+    public int add(int a, int b) {
+        long t0 = System.currentTimeMillis();
+        count.incrementAndGet();
+        int r = delegate.add(a, b);
+        log.info("add tardó {} ms", System.currentTimeMillis() - t0);
+        return r;
+    }
+    // ...y repetir para cada método
+}
+
+// AHORA — Aspecto declarativo
+@Aspect @Component
+public class LoggingAspect {
+    @Around("@annotation(com.springroadmap.aop.annotation.Loggable)")
+    public Object measure(ProceedingJoinPoint pjp) throws Throwable {
+        long t0 = System.currentTimeMillis();
+        try { return pjp.proceed(); }
+        finally { log.info("{} tardó {} ms", pjp.getSignature().toShortString(),
+                           System.currentTimeMillis() - t0); }
+    }
+}
+```
+
+### FAQ del Alumno
+
+- **¿Qué es una anotación custom (`@interface`)?** — Una etiqueta que tú defines y que el compilador (y en runtime, la reflexión / Spring) puede leer. `@Loggable` no hace nada por sí sola; el aspecto es quien reacciona a verla.
+- **¿Por qué el aspecto NO se activa en `MockMvc.standaloneSetup`?** — Porque standalone NO usa el contexto Spring completo, y sin ese contexto no hay auto-proxy. Los aspectos requieren proxies. Por eso `LoggingAspectTest` usa `@SpringBootTest`.
+- **¿Qué es un "proxy" en Spring AOP?** — Un objeto envoltorio que Spring genera en tiempo de ejecución. Cuando el controller pide `CalculatorService`, Spring le entrega el proxy (no el objeto real). El proxy intercepta las llamadas y ejecuta los aspectos antes/después.
+- **¿Por qué mi aspecto no se dispara cuando llamo `this.otroMetodo()`?** — Porque `this` es el objeto real, NO el proxy. Autoinvocaciones saltan el proxy. Es el error más común de AOP.
+- **¿Qué diferencia hay entre `@Before`, `@After` y `@Around`?** — `@Before` corre antes; `@After` corre después (pase lo que pase); `@Around` los engloba y te da el control de decidir si ejecutar el método (`pjp.proceed()`) y qué devolver.
+- **¿`AtomicInteger` vs `int`?** — `int` no es seguro entre hilos: dos requests simultáneos pueden perder incrementos. `AtomicInteger` garantiza incrementos atómicos.
+- **¿Por qué `throws Throwable` en el advice?** — Porque el método interceptado puede lanzar cualquier excepción (checked, unchecked o `Error`). Declarar `Throwable` te obliga a re-lanzarlas y no "tragártelas".
+
 ### Cómo ejecutar
 ```bash
 cd 20-spring-aop
-mvn spring-boot:run
+./build.sh                      # o .\build.ps1 en PowerShell
+java -jar target/spring-aop-1.0.0.jar
 
-# Llama al endpoint de negocio para ver los logs mágicos de AOP en consola
-curl http://localhost:8080/api/business/execute
+# Prueba los endpoints
+curl "http://localhost:8080/api/calc/add?a=2&b=3"   # -> 5   (aspecto se dispara)
+curl "http://localhost:8080/api/calc/sub?a=10&b=4"  # -> 6   (aspecto NO se dispara)
 ```
 
 ### Archivos del Proyecto
 | Archivo | Propósito |
 |---------|-----------|
-| `pom.xml` | Dependencia: `spring-boot-starter-aop`. |
-| `annotation/TrackTime.java` | Anotación custom para marcar métodos lentos. |
-| `aspect/PerformanceAspect.java` | Lógica transversal para cronometrar ejecuciones (`@Around`). |
-| `aspect/LoggingAspect.java` | Lógica para interceptar por nombres de paquete (`@Before`, `@After`). |
-| `service/BusinessService.java` | Código de negocio puro usando anotaciones. |
+| `pom.xml` | Coordenadas Maven + dependencias `web`, `aop`, `test`. |
+| `build.sh` / `build.ps1` | Scripts que fijan `JAVA_HOME` al JDK 21 portable y ejecutan `mvn clean package`. |
+| `SpringAopApplication.java` | Clase principal (`main`) que arranca Spring Boot. |
+| `annotation/Loggable.java` | Anotación custom `@Loggable` (RUNTIME, METHOD). |
+| `aspect/LoggingAspect.java` | `@Aspect` + `@Around` que mide tiempo y cuenta llamadas con `AtomicInteger`. |
+| `service/CalculatorService.java` | `add()` (con `@Loggable`) y `sub()` (sin `@Loggable`). |
+| `controller/CalculatorController.java` | Endpoints `GET /api/calc/add` y `GET /api/calc/sub`. |
+| `application.yml` | Puerto 8080 y niveles de logging. |
+| `SpringAopApplicationTests.java` | `contextLoads` — verifica que el contexto arranca. |
+| `aspect/LoggingAspectTest.java` | `@SpringBootTest` — valida que el aspecto SÍ intercepta `add` (callCount=3) y NO `sub`. |
+| `controller/CalculatorControllerTest.java` | MockMvc standalone — valida routing (aspects no aplican aquí). |
