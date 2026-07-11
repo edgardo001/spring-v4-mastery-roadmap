@@ -1,202 +1,133 @@
-## 36 — TestContainers Avanzado (Redis, Kafka y LocalStack)
+## 36 — Testcontainers (Postgres + Redis reales en tus tests)
 
 ### Propósito
-Llevar tus pruebas de integración al máximo nivel simulando el ecosistema completo de Producción localmente. Aprenderemos a levantar servicios externos complejos (como un Message Broker de Kafka, un Caché de Redis o servicios nativos de AWS) usando Testcontainers.
+Aprender a levantar **múltiples contenedores Docker reales** (Postgres + Redis) durante los tests de integración con Testcontainers, en lugar de mocks o bases de datos "fake" en memoria.
 
 ### Problema que resuelve
-En el Módulo 25 usamos Testcontainers para levantar una base de datos PostgreSQL y probar consultas SQL. Pero una aplicación empresarial moderna raramente depende de una sola base de datos.
-- ¿Cómo pruebas tu código `@KafkaListener` si no tienes un servidor Kafka?
-- ¿Cómo pruebas tu lógica de Caché sin instalar Redis en tu PC local?
-- ¿Cómo pruebas el código que sube imágenes a Amazon S3 (`amazon-s3-sdk`) sin crear un bucket real que te cueste dinero en AWS?
-Los "Mocks" (usar Mockito) son insuficientes para esto. Mockear Kafka no te dirá si la serialización de tu mensaje JSON funciona de verdad en la red.
+Cuando pruebas contra H2 en lugar de Postgres, se te escapan:
+- Diferencias sutiles de SQL (`ILIKE`, `JSONB`, `RETURNING`).
+- Errores de casteo de tipos (`BIGSERIAL` vs `IDENTITY`).
+- Comportamientos de índices y collations.
+- Comandos de Redis mockeados que no fallan cuando la sintaxis real fallaria.
+
+Resultado clásico: **"en mi máquina funciona"**, pero en producción se rompe.
 
 ### Cómo lo resuelve
-Con módulos especializados de **Testcontainers**. Te permiten iniciar contenedores de Kafka, Redis y LocalStack (un simulador de AWS) antes de que corran tus tests. La aplicación se conectará a ellos exactamente como lo haría en Producción, validando la serialización, reconexiones y flujos asíncronos reales.
+Testcontainers arranca contenedores Docker **reales** justo antes del test y los apaga cuando termina. Combinado con `@DynamicPropertySource`, Spring apunta el datasource al contenedor recién creado.
 
 ### Por qué aprenderlo
-Aprender a testear flujos distribuidos y asíncronos separa a un desarrollador intermedio de un Arquitecto. Una vez domines Testcontainers para el stack completo, nunca más dirás "Funcionaba en mi máquina y falló en Producción".
+Es el **estándar de la industria** para tests de integración modernos. Empresas como Netflix, Uber y ING lo usan a diario. Va en tu CV.
 
 ```mermaid
 graph TD
-    A["mvn verify"] --> B["Testcontainers (Docker)"]
-    
-    B --> C["Levanta PostgreSQL 🐳"]
-    B --> D["Levanta Apache Kafka 🐳"]
-    B --> E["Levanta Redis 🐳"]
-    
-    A --> F["Spring Boot @SpringBootTest"]
-    
-    F -->|Conecta (JPA)| C
-    F -->|Produce/Consume mensajes| D
-    F -->|Guarda/Lee Caché| E
-    
-    F -->|"Tests Finalizan"| G["Testcontainers apaga TODO 💥"]
+    A["Test JUnit 5"] -->|@Testcontainers| B["Testcontainers Extension"]
+    B -->|arranca| C["Contenedor Postgres 16"]
+    B -->|arranca| D["Contenedor Redis 7"]
+    E["@DynamicPropertySource"] -->|inyecta URL| F["Spring Environment"]
+    F --> G["Spring Boot Context"]
+    G -->|usa datasource real| C
+    G -->|usa cache real| D
 
-    style B fill:#339af0,color:#fff
-    style G fill:#ff6b6b,color:#fff
+    style C fill:#336791,color:#fff
+    style D fill:#DC382D,color:#fff
+    style G fill:#6DB33F,color:#fff
 ```
 
----
-
 ### Glosario Básico
-
-#### `GenericContainer`
-La clase base de Testcontainers. Si no existe una librería oficial para el servicio que quieres (ej. no hay librería "Testcontainers Redis"), puedes usar esta clase para correr CUALQUIER imagen Docker (ej. `redis:7-alpine`).
-
-#### `LocalStack`
-Una herramienta (y contenedor) fabulosa que simula los servicios en la nube de Amazon Web Services (S3, SQS, SNS, DynamoDB) en tu propia computadora, sin costo.
-
-#### `Awaitility`
-Librería Java indispensable para tests de integración asíncronos. Permite al test "esperar hasta 5 segundos a que aparezca un mensaje en la BD", ideal para probar Kafka.
-
----
+| Término | Explicación |
+|---|---|
+| `@Testcontainers` | Anotación JUnit 5 que activa el ciclo de vida de los `@Container`. |
+| `@Container` | Marca un contenedor Docker gestionado por Testcontainers. |
+| `PostgreSQLContainer<>` | Wrapper específico para Postgres con `getJdbcUrl()`, `getUsername()`, `getPassword()`. |
+| `GenericContainer<>` | Wrapper genérico para cualquier imagen (Redis, Kafka, RabbitMQ). |
+| `@DynamicPropertySource` | Registra propiedades **antes** de crear los beans (crítico para el DataSource). |
+| `withExposedPorts(6379)` | Testcontainers mapea 6379 interno a un puerto libre del host. Usa `getMappedPort(6379)` para leerlo. |
 
 ### Conceptos
 
-#### 1. Testcontainers con Redis (Uso de GenericContainer)
-- **Qué es** — Redis no tiene un módulo "especial" en la librería de Testcontainers Java. Debemos usar la clase cruda `GenericContainer` y exponer su puerto.
-- **Código** — Integrando Redis a tus pruebas:
-  ```java
-  @SpringBootTest
-  @Testcontainers
-  public class CacheIntegrationTest {
-  
-      // Usamos GenericContainer y le decimos qué puerto interno queremos exponer (6379)
-      @Container
-      static GenericContainer<?> redis = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
-              .withExposedPorts(6379);
-  
-      @DynamicPropertySource
-      static void redisProperties(DynamicPropertyRegistry registry) {
-          // El host suele ser "localhost", pero el puerto será uno aleatorio (ej. 32591)
-          registry.add("spring.data.redis.host", redis::getHost);
-          registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379).toString());
-      }
-  
-      @Autowired
-      private ProductService productService; // Servicio con @Cacheable
-  
-      @Test
-      void shouldCacheProductInRedis() {
-          // Llama al servicio (hace consulta pesada y lo guarda en Redis del contenedor)
-          Product p1 = productService.getProduct(1L);
-          
-          // La segunda llamada no debe tocar la Base de Datos ficticia, sino ir al Redis de Docker
-          Product p2 = productService.getProduct(1L);
-          assertEquals(p1, p2);
-      }
-  }
-  ```
+#### 1. Ciclo de vida `@Testcontainers` + `@Container static`
+- **Qué es:** el `@Container static` arranca UNA vez por clase, ANTES de `@BeforeAll`.
+- **Por qué importa:** el contenedor debe estar arriba antes de que Spring intente conectarse. Los beans de DataSource se crean al construir el contexto.
+- **Edge case crítico** (ver `MEMORY.md`): NO puedes usar `Assumptions.assumeTrue(dockerAvailable)` para saltar la clase — el contenedor ya intentó arrancar antes de tu `@BeforeAll`. Solución: marcar con `@Disabled("Requiere Docker Desktop")`.
 
-#### 2. Testcontainers con Apache Kafka
-- **Qué es** — Levantar Kafka localmente suele requerir ZooKeeper y mucha RAM. Con la clase `KafkaContainer` de Testcontainers, se hace en 2 líneas.
-- **Código** — Integración Asíncrona:
-  ```xml
-  <dependency>
-      <groupId>org.testcontainers</groupId>
-      <artifactId>kafka</artifactId>
-      <scope>test</scope>
-  </dependency>
-  <!-- Awaitility es CLAVE para testing asíncrono -->
-  <dependency>
-      <groupId>org.awaitility</groupId>
-      <artifactId>awaitility</artifactId>
-      <scope>test</scope>
-  </dependency>
-  ```
-  ```java
-  @SpringBootTest
-  @Testcontainers
-  public class MessagingIntegrationTest {
-  
-      @Container
-      @ServiceConnection // Autoconfigura mágicamente la URI de Kafka para Spring Boot
-      static KafkaContainer kafka = new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.4.0"));
-  
-      @Autowired
-      private OrderProducer producer;
-  
-      @Autowired
-      private OrderRepository repository; // DB para verificar que el Consumer hizo su trabajo
-  
-      @Test
-      void shouldProduceAndConsumeMessage() {
-          // ACT: Enviamos un mensaje al contenedor Kafka
-          producer.sendOrder("ORD-999");
-          
-          // ASSERT: El Consumer corre en otro hilo y demora milisegundos.
-          // Si hiciéramos assertEquals() aquí, fallaría porque la DB aún no tiene el dato.
-          // Usamos Awaitility para evaluar continuamente durante un máximo de 5 segundos.
-          Awaitility.await()
-              .atMost(Duration.ofSeconds(5))
-              .untilAsserted(() -> {
-                  Optional<Order> order = repository.findByCode("ORD-999");
-                  assertTrue(order.isPresent());
-                  assertEquals("PROCESADO", order.get().getStatus());
-              });
-      }
-  }
-  ```
+#### 2. `@DynamicPropertySource`
+- **Qué es:** un mecanismo para registrar propiedades del `Environment` de Spring en tiempo de arranque.
+- **Por qué importa:** el contenedor Postgres expone un puerto random. Sin este mecanismo no sabrías qué URL poner en `application.yml`.
+- **Analogía:** es como el conserje del hotel que apunta el número de habitación en la ficha del huésped justo cuando le entrega la llave.
 
-#### 3. Simulación de AWS con LocalStack
-- **Qué es** — Supongamos que tu app sube avatares a Amazon S3. Con `LocalStackContainer`, levantas un S3 falso localmente y pruebas tu código del AWS SDK Java v2 real contra él.
-- **Código**:
-  ```xml
-  <dependency>
-      <groupId>org.testcontainers</groupId>
-      <artifactId>localstack</artifactId>
-      <scope>test</scope>
-  </dependency>
-  ```
-  ```java
-  @SpringBootTest
-  @Testcontainers
-  public class S3IntegrationTest {
-  
-      @Container
-      static LocalStackContainer localStack = new LocalStackContainer(DockerImageName.parse("localstack/localstack:2.1"))
-              .withServices(LocalStackContainer.Service.S3); // Solo levantamos el servicio S3
-  
-      @DynamicPropertySource
-      static void awsProperties(DynamicPropertyRegistry registry) {
-          // Redirigimos el Endpoint de AWS oficial hacia el LocalStack de Docker
-          registry.add("aws.s3.endpoint", () -> localStack.getEndpointOverride(LocalStackContainer.Service.S3).toString());
-          registry.add("aws.credentials.access-key", localStack::getAccessKey);
-          registry.add("aws.credentials.secret-key", localStack::getSecretKey);
-      }
-      
-      // Aquí escribirías tu test que inyecta S3Client y sube un archivo
-  }
-  ```
+#### 3. Múltiples contenedores en un mismo test
+- Puedes tener Postgres + Redis + Kafka en la misma clase. Cada `@Container static` es independiente.
+- Testcontainers los arranca en paralelo cuando puede.
 
-#### 4. Edge Cases y Errores Comunes
+### Antes vs Ahora
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| Los tests de Kafka fallan por "Timing" (A veces pasan, a veces no - Flaky Tests) | Usaste `Thread.sleep(2000)` para darle tiempo al consumidor. Si el PC está lento, toma 3 segundos y el test falla. | NUNCA usar `Thread.sleep()` en tests. Usar siempre `Awaitility.await().untilAsserted()`. |
-| Lentitud masiva | Iniciar Postgres, Redis y Kafka en cada clase de prueba (`@SpringBootTest`). | Usa el patrón **Singleton Container**. Extiende todas tus clases de Test de una clase base abstracta (`BaseIntegrationTest`) donde declaras los contenedores estáticos (sin `@Container`). Así solo arrancarán 1 vez para todo el conjunto de tests de Maven. |
-| `@ServiceConnection` no funciona con Redis | GenericContainer no provee suficiente meta-información a Spring. | Para Redis usando GenericContainer, mantén el uso clásico de `@DynamicPropertySource`. |
+| Aspecto | ANTES (H2 fake) | AHORA (Testcontainers) |
+|---|---|---|
+| BD de test | H2 en memoria | Postgres real en Docker |
+| Cache de test | `Mockito.mock(RedisTemplate)` | Redis real en Docker |
+| Sintaxis SQL | Modo "compatibilidad Postgres" (aproximado) | 100 % la sintaxis de Postgres |
+| Detección de bugs | Baja, aparecen en QA/PROD | Alta, aparecen en el laptop |
+| Velocidad | Instantáneo | 2 a 5 s de arranque, luego rápido |
 
----
+Sintaxis Java 21 aplicada:
+```java
+// ANTES (Java 8): cast explícito
+if (o instanceof Product) { Product p = (Product) o; ... }
+
+// AHORA (Java 21): pattern matching
+if (o instanceof Product p) { ... }
+```
+
+### FAQ del Alumno
+- **¿Necesito Docker para compilar el módulo?** No. `mvn package` funciona sin Docker porque los tests que lo requieren están `@Disabled`.
+- **¿Cómo activo los tests de Postgres/Redis?** Instala Docker Desktop, elimina la anotación `@Disabled` del test que quieras correr, y ejecuta `mvn test`.
+- **¿Por qué `@Disabled` y no `Assumptions.assumeTrue`?** Porque `@Testcontainers` arranca el `@Container static` ANTES de `@BeforeAll`, así que la assumption llegaría tarde. Lección aprendida en el módulo 25.
+- **¿Qué es un contenedor Docker?** Una "mini-máquina" aislada que corre software (Postgres, Redis) sin instalarlo en tu SO.
+- **¿Por qué `postgres:16-alpine`?** `alpine` es una distribución Linux minúscula (~5 MB), acelera la descarga y el arranque.
+- **¿El contenedor sobrevive al test?** No, se destruye al final de la clase de test. Cada corrida empieza limpia.
+- **¿Puedo usar Kafka?** Sí, añade `org.testcontainers:kafka` y usa `KafkaContainer`.
 
 ### Ejercicios
-1. Crea un proyecto con dependencias de Spring Data Redis y Kafka. Añade Testcontainers a la carpeta test.
-2. Escribe una clase base abstracta `AbstractIntegrationTest` que levante un contenedor Redis y un contenedor Kafka (Patrón Singleton).
-3. Haz que tus clases de test hereden de esta clase.
-4. Escribe un test para probar la escritura y lectura en caché (usando `RedisTemplate` inyectado por Spring, el cual estará conectado al contenedor).
-5. Implementa Awaitility (agrégalo al pom) y haz un test enviando un mensaje a Kafka, y esperando 3 segundos a que una variable en memoria cambie de estado.
+1. Añade un endpoint `PUT /api/products/{id}` y un test contra Postgres real.
+2. Modela un carrito con TTL en Redis y verifica la expiración con Testcontainers.
+3. Agrega un tercer contenedor (Kafka) y publica un evento `ProductCreated`.
+4. Crea un `@Container` compartido para toda la suite con `@Testcontainers(disabledWithoutDocker = true)`.
 
 ### Cómo ejecutar
-```bash
-cd 36-testcontainers
 
-# Asegúrate de tener Docker Engine encendido
-mvn clean test
+```powershell
+# PowerShell
+.\build.ps1
+java -jar target\testcontainers-1.0.0.jar
+```
+
+```bash
+# Git Bash / Linux / macOS
+./build.sh
+java -jar target/testcontainers-1.0.0.jar
+```
+
+**Nota Docker:** el JAR arranca con H2 sin necesidad de Docker. Los tests marcados `@Disabled` requieren Docker Desktop en ejecución para activarse.
+
+Endpoints disponibles:
+```
+GET    http://localhost:8080/api/products
+GET    http://localhost:8080/api/products/{id}
+POST   http://localhost:8080/api/products    (body JSON: {"name":"X","price":9.99})
+DELETE http://localhost:8080/api/products/{id}
 ```
 
 ### Archivos del Proyecto
+
 | Archivo | Propósito |
-|---------|-----------|
-| `pom.xml` | `testcontainers-kafka`, `testcontainers-localstack`, `awaitility`. |
-| `src/test/../KafkaIntegrationTest.java` | Test asíncrono comprobando el consumo de Kafka. |
-| `src/test/../RedisIntegrationTest.java` | Test de `GenericContainer` para probar el sistema de Caché. |
+|---|---|
+| `pom.xml` | Dependencias Spring Boot 4.1.0, Testcontainers BOM 1.20.4, Postgres, Redis, H2. |
+| `build.sh` / `build.ps1` | Compilación con toolchain portable (JDK 21 + Maven 3.9.16). |
+| `src/main/resources/application.yml` | Config por defecto: H2 en memoria + Redis a `localhost`. |
+| `TestcontainersApplication.java` | Punto de entrada Spring Boot. |
+| `domain/Product.java` | Entidad JPA (id, name, price BigDecimal). |
+| `repository/ProductRepository.java` | Repositorio Spring Data JPA. |
+| `controller/ProductController.java` | CRUD REST bajo `/api/products`. |
+| `TestcontainersApplicationTests.java` | Smoke test con H2 (siempre verde). |
+| `repository/ProductRepositoryPostgresTest.java` | `@Disabled`. Postgres real vía `PostgreSQLContainer`. |
+| `service/ProductServiceCacheTest.java` | `@Disabled`. Redis real vía `GenericContainer`. |

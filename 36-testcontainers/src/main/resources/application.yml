@@ -1,0 +1,37 @@
+# =============================================================================
+# Módulo 36 — testcontainers
+# Configuración por defecto: H2 en memoria (para correr el JAR sin Docker).
+# En los tests con Testcontainers, @DynamicPropertySource sobreescribe la URL
+# apuntando al contenedor Postgres/Redis levantado en ese momento.
+# =============================================================================
+spring:
+  application:
+    name: testcontainers
+
+  datasource:
+    url: jdbc:h2:mem:productsdb;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+  jpa:
+    hibernate:
+      ddl-auto: update      # H2 en memoria: crea el schema al arrancar.
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  # Redis por defecto apunta a localhost (no se conecta a menos que lo uses).
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+server:
+  port: 8080
+
+logging:
+  level:
+    root: INFO
+    com.springroadmap.testcontainers: DEBUG
