@@ -1,212 +1,137 @@
-## 23 — WebSockets (Comunicaciones en Tiempo Real)
+## 23 — WebSocket con STOMP
 
 ### Propósito
-Aprender a implementar comunicaciones bidireccionales en tiempo real entre el servidor y el cliente (Navegador, App Móvil) utilizando WebSockets sobre el protocolo STOMP (Simple Text Oriented Messaging Protocol) en Spring Boot.
+Aprender a enviar y recibir mensajes en tiempo real entre navegador y servidor usando **WebSocket** con el sub-protocolo **STOMP** y un broker in-memory de Spring.
 
 ### Problema que resuelve
-El protocolo HTTP tradicional es **unidireccional** y sigue el modelo Petición-Respuesta: el cliente (Navegador) siempre debe dar el primer paso. El servidor no puede "enviarle" un mensaje al cliente si este no se lo ha pedido.
-- Si haces una aplicación de Chat con HTTP, el navegador debe estar preguntando al servidor "¿Hay mensajes nuevos?" cada 1 segundo (Short Polling).
-- El Polling consume un exceso brutal de recursos (CPU, red, batería en móviles), abre y cierra conexiones TCP constantemente y no es verdaderamente en tiempo real.
+HTTP es *request/response*: el cliente pregunta, el servidor responde y la conexión se cierra. Para "notificar" al usuario de un evento (chat, precio de bolsa, jugada de un partido) se recurría al *long polling* — consultas repetidas cada N segundos. Malgasta batería, latencia alta, no escala.
 
 ### Cómo lo resuelve
-WebSocket crea un "túnel" TCP **persistente y bidireccional**. Una vez abierto, permanece conectado; el servidor puede empujar (push) datos al cliente instantáneamente en cuanto ocurren los eventos, sin que el cliente tenga que preguntar. Spring usa STOMP, un subprotocolo que organiza los mensajes en "canales" o "tópicos", muy parecido a como funciona el correo postal (buzones y suscripciones).
+- **WebSocket** abre una conexión TCP bidireccional persistente sobre HTTP (upgrade `101 Switching Protocols`).
+- **STOMP** es un protocolo de texto simple (como HTTP para mensajería) que corre DENTRO del WebSocket: define *destinos* (`/topic/x`), *frames* (`SEND`, `SUBSCRIBE`, `MESSAGE`) y *encabezados*.
+- **Broker in-memory de Spring** (`enableSimpleBroker`) redistribuye a todos los suscritos sin necesidad de un RabbitMQ/ActiveMQ externo.
 
 ### Por qué aprenderlo
-Si vas a construir un Chat (WhatsApp), un Dashboard Financiero en tiempo real (Trading), Notificaciones Push (como Facebook/Instagram) o juegos multijugador, HTTP no sirve. WebSockets es la tecnología estándar de la industria para el streaming bidireccional y es un skill de alta demanda para perfiles frontend y backend.
+Cualquier dashboard "vivo", chat, notificaciones push web, colaboración estilo Google Docs, o tickers financieros usan este patrón.
 
 ```mermaid
-sequenceDiagram
-    participant Browser as Cliente
-    participant Server as Spring WebSocket
-    participant Broker as STOMP Message Broker
+flowchart LR
+    C1["Cliente A<br/>navegador"]:::client -->|SEND /app/chat.send| APP[["/app<br/>MessageMapping"]]:::app
+    APP -->|"@SendTo"| BROKER[/"/topic/messages<br/>Simple Broker"/]:::broker
+    BROKER -->|MESSAGE| C1
+    BROKER -->|MESSAGE| C2["Cliente B<br/>navegador"]:::client
+    BROKER -->|MESSAGE| C3["Cliente C<br/>navegador"]:::client
 
-    Browser->>Server: 1. Handshake HTTP (Upgrade to WebSocket)
-    Server-->>Browser: 101 Switching Protocols (Túnel Abierto)
-    
-    Browser->>Broker: 2. SUBSCRIBE "/topic/chat"
-    
-    Note over Browser,Server: Conexión Activa y Persistente
-    
-    Browser->>Server: 3. SEND "/app/sendMessage" (Hola!)
-    Server->>Server: Lógica en el @MessageMapping
-    Server->>Broker: Redirige respuesta
-    Broker-->>Browser: 4. MESSAGE en "/topic/chat" (Hola a todos!)
+    classDef client fill:#dbeafe,stroke:#1e40af,color:#1e3a8a
+    classDef app    fill:#fef3c7,stroke:#b45309,color:#78350f
+    classDef broker fill:#dcfce7,stroke:#166534,color:#14532d
 ```
 
----
-
 ### Glosario Básico
-
-#### `WebSocket`
-Protocolo de red a nivel de aplicación (sobre TCP) que provee canales de comunicación full-duplex. Empieza como HTTP pero hace un "Upgrade".
-
-#### `STOMP`
-Un protocolo simple basado en texto que se monta sobre WebSocket. Define comandos (`CONNECT`, `SUBSCRIBE`, `SEND`) para que Spring sepa a quién debe ir el mensaje, como un "enrutador" para sockets. Sin STOMP, un WebSocket solo envía y recibe un bloque de texto sin formato ni destino claro.
-
-#### `@EnableWebSocketMessageBroker`
-Anotación de configuración que enciende el servidor WebSocket de Spring y el "Message Broker" (el cartero en memoria).
-
-#### `@MessageMapping`
-Equivalente a `@PostMapping`, pero para WebSockets. Define a qué ruta STOMP (ej. `/chat.send`) responde este método cuando un cliente le envía un mensaje.
-
-#### `SimpMessagingTemplate`
-Herramienta de Spring que usas en cualquier servicio (ej: `OrderService`) para enviar un mensaje a los clientes de forma proactiva, sin que ellos te hayan enviado uno primero.
-
----
+| Término | Explicación |
+|---|---|
+| **WebSocket** | Conexión TCP bidireccional persistente iniciada sobre HTTP (upgrade). |
+| **STOMP** | *Simple Text Oriented Messaging Protocol.* Formato de frames sobre el socket. |
+| **Broker** | Componente que recibe mensajes y los reparte a los suscriptores. |
+| **Destino** | Cadena que identifica una "cola" o "topic" (`/topic/messages`). |
+| **`/app`** | Prefijo para mensajes que van AL servidor (los procesa un `@MessageMapping`). |
+| **`/topic`** | Prefijo para mensajes que van DESDE el servidor (broadcast a todos los suscritos). |
+| **SockJS** | Fallback JS para navegadores/proxies que bloquean WebSocket nativo. |
+| **`@MessageMapping`** | Equivalente a `@GetMapping` pero para mensajes STOMP. |
+| **`@SendTo`** | Publica el retorno del método en un destino del broker. |
+| **`record`** | Clase inmutable de datos de Java 14+ (aquí para el DTO `ChatMessage`). |
+| **`Instant`** | Punto exacto en el tiempo en UTC (`java.time`), reemplazo de `Date`. |
 
 ### Conceptos
 
-#### 1. Configuración del Broker y Endpoint
-- **Qué es** — Debes decirle a Spring dónde los clientes pueden conectarse para abrir el túnel, qué prefijo usarán para enviarte cosas al servidor, y qué buzones (topics) existen para que se suscriban.
-- **Por qué importa** — Es la infraestructura central. Un error aquí (ej. bloquear CORS) y el Frontend jamás podrá establecer el Handshake (Conexión Inicial).
-- **Código** — Configuración completa:
-  ```java
-  @Configuration
-  @EnableWebSocketMessageBroker
-  public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
-  
-      @Override
-      public void registerStompEndpoints(StompEndpointRegistry registry) {
-          // El punto de entrada inicial. El frontend hace "new SockJS('/ws')"
-          registry.addEndpoint("/ws")
-                  .setAllowedOriginPatterns("*") // En PROD poner la URL real del frontend
-                  .withSockJS(); // Soporte de compatibilidad para navegadores viejos
-      }
-  
-      @Override
-      public void configureMessageBroker(MessageBrokerRegistry registry) {
-          // Destino para mensajes desde el Servidor hacia el Cliente (Suscripción)
-          registry.enableSimpleBroker("/topic");
-  
-          // Destino para mensajes desde el Cliente hacia el Servidor (Acción)
-          // El frontend usará, ej: /app/chat.sendMessage
-          registry.setApplicationDestinationPrefixes("/app");
-      }
-  }
-  ```
+#### 1. `@EnableWebSocketMessageBroker`
+- **Qué es**: activa el subsistema completo de mensajería (STOMP over WebSocket) en el contexto.
+- **Por qué importa**: sin ella, los `@MessageMapping` se ignoran y no hay broker.
+- **Analogía**: encender la torre de transmisión de una radio; sin corriente, los locutores hablan al aire y nadie los oye.
+- **Caso empresarial**: microservicio de notificaciones que empuja alertas a un dashboard operativo.
 
-#### 2. Controlador Reactivo (Receptor)
-- **Qué es** — El controlador ya no recibe peticiones HTTP, recibe mensajes STOMP. Tomas el mensaje, haces algo con él, y lo retransmites al canal público.
-- **Código** — El Controlador WebSocket:
-  ```java
-  @Controller
-  @Slf4j
-  public class ChatController {
-  
-      /**
-       * El cliente envía a: /app/chat.send
-       * El método se ejecuta y retorna el objeto al canal: /topic/public
-       */
-      @MessageMapping("/chat.send")
-      @SendTo("/topic/public") // Canal público donde todos escuchan
-      public ChatMessage sendMessage(@Payload ChatMessage chatMessage) {
-          log.info("Mensaje recibido de {}: {}", chatMessage.sender(), chatMessage.content());
-          
-          // Se puede modificar el mensaje (ej: limpiar groserías, añadir hora del servidor)
-          return new ChatMessage(
-              chatMessage.sender(),
-              chatMessage.content(),
-              LocalDateTime.now().toString()
-          );
-      }
-      
-      /**
-       * Evento especial cuando alguien "entra" al chat
-       */
-      @MessageMapping("/chat.addUser")
-      @SendTo("/topic/public")
-      public ChatMessage addUser(@Payload ChatMessage chatMessage, 
-                                 SimpMessageHeaderAccessor headerAccessor) {
-          // Guardar el nombre de usuario en la sesión de WebSocket
-          headerAccessor.getSessionAttributes().put("username", chatMessage.sender());
-          
-          return new ChatMessage("SISTEMA", chatMessage.sender() + " se ha unido!", LocalDateTime.now().toString());
-      }
-  }
-  ```
+#### 2. Endpoint STOMP `/ws` con SockJS
+- **Qué es**: la URL HTTP donde el cliente hace *upgrade* a WebSocket.
+- **Por qué importa**: es la puerta única; todo cliente entra por aquí. Con SockJS obtenemos degradación elegante.
+- **Casos**: apps móviles híbridas o corporativos con proxies estrictos.
 
-#### 3. Enviando Mensajes Proactivamente (Notificaciones)
-- **Qué es** — Muchas veces el mensaje no nace en el chat. Nace de un evento de negocio (ej: Una compra fue aprobada). Puedes enviar un mensaje WebSocket desde cualquier parte de tu código usando `SimpMessagingTemplate`.
-- **Por qué importa** — Permite crear sistemas de Notificaciones Push (Campanita de la web) atadas a flujos transaccionales y bases de datos.
-- **Código** — Disparar un WebSocket desde un Service normal:
-  ```java
-  @Service
-  public class OrderService {
-  
-      private final SimpMessagingTemplate messagingTemplate;
-  
-      public OrderService(SimpMessagingTemplate messagingTemplate) {
-          this.messagingTemplate = messagingTemplate;
-      }
-  
-      public void approveOrder(Long orderId) {
-          // 1. Lógica de negocio pesada (Cobro, Guardado BD)
-          // ...
-          
-          // 2. Notificar al Frontend (Panel de Administración) en tiempo real
-          String mensaje = "La orden #" + orderId + " ha sido procesada con éxito.";
-          
-          // Empuja el mensaje a todos los administradores suscritos a "/topic/orders"
-          messagingTemplate.convertAndSend("/topic/orders", mensaje);
-      }
-  }
-  ```
+#### 3. Broker simple `/topic` + prefijo `/app`
+- **Qué es**: dos "carriles" separados. `/app/*` entra al servidor, `/topic/*` sale a los clientes.
+- **Por qué importa**: la asimetría clarifica quién puede publicar dónde y previene abusos.
+- **Analogía**: `/app` = buzón de sugerencias (entrada); `/topic` = tablón de anuncios (salida pública).
+- **Casos**: chat, feed de precios, notificaciones de sistema.
 
-#### 4. Frontend Básico (JavaScript puro)
-- Para probar WebSockets no basta con `curl` ni Postman tradicional (aunque Postman moderno lo soporta). Se requieren librerías de cliente como `sockjs-client` y `stompjs`.
-- **Snippet de Frontend** (Solo para entendimiento):
-  ```javascript
-  const socket = new SockJS('http://localhost:8080/ws');
-  const stompClient = Stomp.over(socket);
+#### 4. `ChatController` con `@MessageMapping` + `@SendTo`
+- **Qué es**: el "locutor" que toma un mensaje entrante, lo procesa y lo re-emite a todos.
+- **Edge case**: el timestamp lo sella el SERVIDOR (no el cliente) para evitar spoofing y desfases horarios.
 
-  stompClient.connect({}, function (frame) {
-      console.log('Conectado: ' + frame);
-      
-      // Suscribirse para escuchar al servidor
-      stompClient.subscribe('/topic/public', function (message) {
-          console.log("Nuevo mensaje recibido: " + JSON.parse(message.body).content);
-      });
-      
-      // Enviar un mensaje al servidor
-      stompClient.send("/app/chat.send", {}, JSON.stringify({
-          sender: "Edgardo",
-          content: "Hola a todos!"
-      }));
-  });
-  ```
+### Antes vs Ahora (Java 8 → Java 21)
 
-#### 5. Edge Cases y Errores Comunes
+| Tema | ANTES (Java 8) | AHORA (Java 21) |
+|---|---|---|
+| DTO `ChatMessage` | Clase con 3 campos `private final`, constructor, 3 getters, `equals`, `hashCode`, `toString` (25+ líneas o Lombok `@Value`). | `public record ChatMessage(String from, String content, Instant timestamp) {}` en 1 línea. |
+| Fecha/hora | `new java.util.Date()` — mutable, sin zona horaria clara, bug histórico en producción. | `Instant.now()` — inmutable, siempre UTC. |
+| Notificaciones al navegador | Long polling con `setInterval(fetch, 2000)` desde JS. | WebSocket + STOMP: el servidor **empuja**; latencia < 50 ms. |
+| Acceso a campo del DTO | `dto.getFrom()` | `dto.from()` (accessor del record). |
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| Handshake Fallido (CORS Error) | El frontend en `localhost:4200` (Angular) intenta conectarse al backend en `8080` | Usar `.setAllowedOriginPatterns("*")` en `registerStompEndpoints`. |
-| El servidor cierra la conexión rápido | Red proxy (Nginx, AWS ALB) o inactividad matan el túnel | Configurar los *Heartbeats* (latidos) en SockJS para mantener la conexión viva enviando PINGs vacíos. |
-| OOM (Out of Memory) o lentitud | Usar el Broker en memoria simple para miles de usuarios concurrentes | Reemplazar el `SimpleBroker` por un broker completo (RabbitMQ o ActiveMQ) conectándolo en `WebSocketConfig`. |
-| Autenticación perdida (JWT) | Los tokens Bearer por headers no funcionan bien en el Handshake WebSocket nativo del navegador | Enviar el JWT token dentro del STOMP frame `CONNECT` o como un parámetro URL (`?token=x`) en el endpoint de SockJS. |
+### FAQ del Alumno
 
----
+- **¿Qué es un WebSocket exactamente?** Una conexión TCP que arranca como una petición HTTP normal y luego "cambia de piel" (upgrade) para quedar abierta permanentemente. Ambos lados pueden mandar datos en cualquier momento.
+- **¿Por qué necesito STOMP si ya tengo WebSocket?** WebSocket sólo transporta bytes; no sabe qué es un "canal" ni cómo suscribirse. STOMP añade esa capa (frames, destinos, encabezados). Es como HTTP sobre TCP: TCP mueve bytes, HTTP les da estructura.
+- **¿Qué es `/topic/messages`?** Un *destino*: una etiqueta acordada entre el server y todos los suscriptores. No es una URL de tu app; vive dentro del broker.
+- **¿Qué es SockJS?** Un plan B: si el WebSocket falla, SockJS negocia long-polling. Se activa sólo con `.withSockJS()`.
+- **¿Por qué `@Controller` y no `@RestController`?** Porque no devolvemos HTTP JSON: devolvemos objetos que Spring publica en el broker vía `@SendTo`.
+- **¿Puedo mandar mensajes desde el server sin que un cliente los pida?** Sí, inyectando `SimpMessagingTemplate` y llamando a `convertAndSend("/topic/messages", obj)`.
+- **¿Y si tengo miles de conexiones?** Se cambia `enableSimpleBroker` por `enableStompBrokerRelay(...)` apuntando a RabbitMQ con soporte STOMP.
+- **¿Por qué el timestamp lo pone el server?** Para evitar que el cliente mienta o tenga el reloj mal.
 
 ### Ejercicios
-1. Crea un proyecto con la dependencia `spring-boot-starter-websocket`.
-2. Configura el `WebSocketConfig` definiendo el endpoint `/ws` y los prefijos `/app` (envío) y `/topic` (escucha).
-3. Crea un DTO `Notification(String user, String message)`.
-4. Crea un `@RestController` normal con un endpoint HTTP `POST /api/notify`. Este controlador inyectará `SimpMessagingTemplate` y cada vez que lo llames con CURL, empujará la notificación al canal `/topic/notifications`.
-5. Si sabes algo de HTML/JS, crea un archivo `index.html` estático usando `SockJS` y conéctate para ver llegar las notificaciones de consola en tiempo real.
+1. Añadir un segundo `@MessageMapping` para `/app/chat.private` que envíe un mensaje sólo a un usuario específico (`SimpMessagingTemplate#convertAndSendToUser`).
+2. Cambiar el broker simple por un relay a RabbitMQ y comparar la configuración.
+3. Añadir un `HandshakeInterceptor` para autenticar al usuario que se conecta al `/ws`.
+4. Escribir un cliente Java con `WebSocketStompClient` que se conecte, se suscriba y publique 5 mensajes.
 
 ### Cómo ejecutar
-```bash
-cd 23-websocket
-mvn spring-boot:run
 
-# Para probar, puedes usar la interfaz visual de Postman v10+ creando un request tipo "WebSocket Request"
-# Conectarse a: ws://localhost:8080/ws/websocket
+```bash
+# Build (Git Bash)
+./build.sh
+
+# Build (PowerShell)
+.\build.ps1
+
+# Ejecutar (después de build)
+java -jar target/websocket-1.0.0.jar
+
+# Modo desarrollo
+mvn spring-boot:run
+```
+
+Endpoint de handshake: `http://localhost:8080/ws` (STOMP over SockJS).
+
+Probar con un cliente JS:
+```html
+<script src="https://cdn.jsdelivr.net/npm/sockjs-client/dist/sockjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/stompjs/lib/stomp.min.js"></script>
+<script>
+  const stomp = Stomp.over(new SockJS("http://localhost:8080/ws"));
+  stomp.connect({}, () => {
+    stomp.subscribe("/topic/messages", m => console.log(JSON.parse(m.body)));
+    stomp.send("/app/chat.send", {}, JSON.stringify({from:"ada", content:"hola"}));
+  });
+</script>
 ```
 
 ### Archivos del Proyecto
+
 | Archivo | Propósito |
-|---------|-----------|
-| `pom.xml` | Dependencia: `spring-boot-starter-websocket`. |
-| `config/WebSocketConfig.java` | Endpoints, CORS y Message Broker. |
-| `dto/ChatMessage.java` | Payload del mensaje (Record). |
-| `controller/ChatController.java` | Receptor `@MessageMapping` para lógica de chat. |
-| `controller/NotifyController.java` | Endpoint HTTP que dispara mensajes vía `SimpMessagingTemplate`. |
+|---|---|
+| `pom.xml` | Dependencias: `spring-boot-starter-web`, `spring-boot-starter-websocket`, test. |
+| `application.yml` | Puerto 8080 + logging del subsistema messaging. |
+| `WebsocketApplication.java` | Clase `main` con `@SpringBootApplication`. |
+| `config/WebSocketConfig.java` | `@EnableWebSocketMessageBroker`, endpoint `/ws`, broker `/topic`, prefijo `/app`. |
+| `dto/ChatMessage.java` | `record` inmutable con `from`, `content`, `timestamp`. |
+| `controller/ChatController.java` | `@MessageMapping("/chat.send")` + `@SendTo("/topic/messages")`. |
+| `WebsocketApplicationTests.java` | Test `contextLoads`. |
+| `controller/ChatControllerTest.java` | Test unitario del handler. |
+| `build.sh` / `build.ps1` | Build con toolchain portable. |
