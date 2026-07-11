@@ -1,0 +1,17 @@
+server:
+  port: 8080
+  # Hardening: no exponer info sensible del servidor en headers.
+  error:
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-exception: false
+
+spring:
+  application:
+    name: hexagonal
+
+logging:
+  level:
+    root: INFO
+    com.springroadmap.hexagonal: INFO

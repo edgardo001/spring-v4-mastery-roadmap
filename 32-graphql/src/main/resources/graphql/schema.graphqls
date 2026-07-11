@@ -1,0 +1,27 @@
+# Schema GraphQL del modulo 32.
+# Spring Boot lo detecta automaticamente en classpath:/graphql/*.graphqls
+#
+# Convenciones del lenguaje SDL (Schema Definition Language):
+#   '!'   -> el campo es NON-NULL (obligatorio).
+#   '[X]' -> lista de X (puede ser nula, y sus elementos pueden ser nulos).
+#   '[X!]!' -> lista NON-NULL de elementos NON-NULL.
+#   ID    -> escalar identificador; se serializa como String en JSON.
+
+type Book {
+    id: ID!
+    title: String!
+    author: String!
+}
+
+type Query {
+    # Devuelve todos los libros; nunca null, nunca elementos null.
+    books: [Book!]!
+
+    # Busca por id. Puede retornar null si no existe (por eso Book y no Book!).
+    bookById(id: ID!): Book
+}
+
+type Mutation {
+    # Crea un libro y retorna el registro creado (obligatorio, Book!).
+    addBook(title: String!, author: String!): Book!
+}

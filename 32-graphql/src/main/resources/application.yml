@@ -1,0 +1,23 @@
+# Configuracion Spring Boot del modulo 32 - Spring GraphQL.
+spring:
+  application:
+    name: graphql
+
+  graphql:
+    # GraphiQL es la UI web para probar queries. Se expone en /graphiql.
+    graphiql:
+      enabled: true
+      path: /graphiql
+
+    # (opcional) descubrimiento del schema. Por defecto lee classpath:/graphql/*.graphqls
+    schema:
+      locations: classpath:/graphql/
+      file-extensions: .graphqls,.gqls
+
+server:
+  port: 8080
+
+# Logs utiles mientras se aprende: se ve el schema cargado y los data fetchers.
+logging:
+  level:
+    org.springframework.graphql: INFO

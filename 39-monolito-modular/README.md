@@ -1,192 +1,168 @@
-## 39 — Monolito Modular (Spring Modulith)
+# Modulo 39 - Monolito Modular
 
-### Propósito
-Aprender a estructurar una aplicación gigante en un **Monolito Modular** utilizando `Spring Modulith`. Esta arquitectura divide tu código en módulos estrictamente aislados (Ventas, Inventario, Envíos) dentro del *mismo* proyecto Maven, garantizando que el código no se vuelva espagueti sin tener que pagar la extrema complejidad de los Microservicios.
+Monolito organizado por **modulos de dominio** (paquetes) que se comunican
+por **eventos de Spring** en vez de llamadas directas.
 
-### Problema que resuelve
-El dilema eterno: "Monolito Espagueti vs Microservicios Prematuros".
-- **Monolito Espagueti**: Todos programan en el mismo código. El módulo de Ventas importa directamente la Entidad JPA de Inventario. Cuando cambias una columna en Inventario, la compilación de Ventas se rompe.
-- **Microservicios Prematuros**: Decides separarlo todo en 5 proyectos distintos (Microservicios) desde el día 1. Ahora sufres manejando 5 repositorios, llamadas HTTP que fallan, latencia de red, despliegues complejos y transacciones distribuidas. Tu equipo pierde semanas configurando infraestructura en vez de aportar valor al negocio.
+- Spring Boot 4.1.0 + Java 21
+- `groupId=com.springroadmap` / `artifactId=monolito-modular` / v1.0.0
+- Paquete raiz: `com.springroadmap.modulith`
+- Artefacto: `target/monolito-modular-1.0.0.jar`
 
-### Cómo lo resuelve
-**El Monolito Modular** es el término medio perfecto. Mantienes todo el código en 1 solo proyecto (1 despliegue, 1 Base de Datos, llamadas a memoria ultrarrápidas). Pero, usas `Spring Modulith` para poner **muros de contención** (reglas arquitectónicas).
-Ventas no puede importar la Entidad de Inventario (Spring Modulith lanza error de compilación si lo intentas). Solo se comunican a través de Interfaces públicas (APIs internas) o mediante Eventos (Publicar/Suscribir).
+## Estructura
 
-### Por qué aprenderlo
-La industria se está devolviendo. Muchos equipos que migraron a microservicios descubrieron que su negocio no justificaba tanta complejidad ("Distributed Monolith"). El Monolito Modular, impulsado oficialmente por Spring (Modulith), es la arquitectura por defecto recomendada hoy para proyectos nuevos, ya que permite extraer microservicios fácilmente más adelante si *realmente* se requiere.
-
-```mermaid
-graph TD
-    subgraph Monolito Modular (1 Solo Proyecto / JVM)
-        
-        subgraph Módulo Ventas
-            V_API["API Pública (Interface)"]
-            V_INT["Internals (Entidades, Repos, Privado)"]
-        end
-        
-        subgraph Módulo Inventario
-            I_API["API Pública (Interface)"]
-            I_INT["Internals (Entidades, Repos, Privado)"]
-        end
-        
-        V_API --> V_INT
-        I_API --> I_INT
-        
-        V_INT -->|"❌ PROHIBIDO (Error Test)"| I_INT
-        V_INT -->|"✅ PERMITIDO"| I_API
-        
-        V_INT -->|"✅ EVENTO ASÍNCRONO"| I_API
-    end
-
-    style V_INT fill:#ffc9c9,stroke:#e03131
-    style I_INT fill:#ffc9c9,stroke:#e03131
-    style V_API fill:#d3f9d8,stroke:#2b8a3e
-    style I_API fill:#d3f9d8,stroke:#2b8a3e
+```
+com.springroadmap.modulith/
+├── ModulithApplication.java
+├── orders/                          <-- MODULO orders (API publica)
+│   ├── Order.java                   (record publico)
+│   ├── OrderService.java            (@Service publico)
+│   ├── OrderController.java         (adaptador HTTP del modulo)
+│   └── internal/                    <-- detalle, no usar desde fuera
+│       ├── OrderRepository.java
+│       └── OrderCreatedEvent.java
+└── notifications/                   <-- MODULO notifications
+    ├── NotificationListener.java    (@EventListener)
+    └── internal/
+        └── NotificationHistory.java
 ```
 
----
+Regla de oro: **nada fuera del paquete `X` puede importar `X.internal.*`**
+(excepto los eventos, que son el "contrato" entre modulos).
 
-### Glosario Básico
+## Endpoint
 
-#### `Monolito Modular`
-Un diseño donde el código fuente se agrupa por Bounded Contexts (Contextos de Negocio, ej. Facturación, RRHH), manteniendo límites estrictos de acceso entre ellos, pero desplegándose como un solo archivo `.jar`.
+```
+POST /api/orders?customer=Ana
+```
 
-#### `Spring Modulith`
-Librería oficial (Introducida formalmente con Spring Boot 3.x) que provee validación de arquitectura, pruebas aisladas por módulo y soporte nativo para eventos transaccionales, ayudando a construir Monolitos Modulares robustos.
+Devuelve `{ "id": 1, "customer": "Ana" }` y dispara `OrderCreatedEvent`.
+`NotificationListener` lo captura e incrementa un contador.
 
-#### `ApplicationModules`
-Clase core de Spring Modulith usada en los Tests para escanear tus paquetes y verificar que ningún módulo esté violando la privacidad de otro módulo.
+## Antes vs Ahora
 
-#### `Eventos (ApplicationEvent)`
-El mecanismo recomendado para que dos módulos se comuniquen sin acoplarse. Ventas publica un evento `OrderPlacedEvent` a la memoria. Inventario está suscrito y lo recibe, reduciendo el stock.
+### Antes - Monolito espagueti
 
----
+```java
+@Service
+class OrderService {
+    private final NotificationService notifications; // acoplamiento directo
+    private final AuditService audit;
+    private final EmailService email;
+    public Order create(String c) {
+        Order o = repo.save(c);
+        notifications.send(o);   // si notifications cae, orders cae
+        audit.log(o);
+        email.send(o);
+        return o;
+    }
+}
+```
 
-### Conceptos
+Problemas:
+- Un cambio en notifications rompe orders.
+- Imposible testear orders sin cargar medio contexto.
+- No se puede extraer notifications como microservicio sin cirugia mayor.
+- Todo en un solo paquete: nadie sabe donde termina un dominio.
 
-#### 1. Estructura de Paquetes Strict (Por Dominio)
-- **Qué es** — En Modulith, los paquetes de primer nivel definen los "Módulos". Todo lo que está *directamente* en ese paquete es público para otros módulos. Todo lo que está en sub-paquetes es PRIVADO.
-- **Código** — Estructura obligatoria:
-  ```text
-  com.empresa.app
-  ├── orders/                      # Módulo 'Orders'
-  │   ├── OrderFacade.java         # PÚBLICO (Otros módulos pueden inyectarlo)
-  │   ├── OrderPlacedEvent.java    # PÚBLICO (El evento compartido)
-  │   └── internal/                # PRIVADO (Restringido por Modulith)
-  │       ├── Order.java           # Entidad JPA
-  │       └── OrderRepository.java # Repositorio
-  ├── inventory/                   # Módulo 'Inventory'
-  │   ├── InventoryFacade.java     # PÚBLICO
-  │   └── internal/                # PRIVADO
-  │       ├── Product.java
-  │       └── InventoryRepository.java
-  ```
+### Ahora - Monolito modular con eventos
 
-#### 2. Validación de Arquitectura (Los Test de Modulith)
-- **Qué es** — Un programador novato podría intentar inyectar `OrderRepository` dentro de `InventoryFacade.java`. ¡Esto rompe el aislamiento! Spring Modulith te permite crear un Test Unitario que falla si alguien rompe las reglas.
-- **Código** — Archivo `ArchitectureTest.java`:
-  ```xml
-  <!-- En pom.xml -->
-  <dependency>
-      <groupId>org.springframework.modulith</groupId>
-      <artifactId>spring-modulith-starter-test</artifactId>
-      <scope>test</scope>
-  </dependency>
-  ```
-  ```java
-  class ArchitectureTest {
-      
-      // Analiza todo el proyecto a partir del paquete raíz
-      ApplicationModules modules = ApplicationModules.of(MainApplication.class);
-  
-      @Test
-      void verifyModularStructure() {
-          // Esto fallará (lanzará excepción) si el módulo de Inventario 
-          // importa una clase del sub-paquete 'internal' de Órdenes
-          modules.verify();
-      }
-      
-      @Test
-      void createModuleDocumentation() {
-          // Magia: Genera diagramas UML PlantUML y Canvas de arquitectura automáticamente!
-          new Documenter(modules).writeModulesAsPlantUml();
-      }
-  }
-  ```
+```java
+@Service
+public class OrderService {
+    private final OrderRepository repo;
+    private final ApplicationEventPublisher publisher;
+    public Order createOrder(String c) {
+        Order o = repo.save(c);
+        publisher.publishEvent(new OrderCreatedEvent(o.id(), o.customer()));
+        return o;
+    }
+}
 
-#### 3. Comunicación por Eventos (Desacoplamiento Extremo)
-- **Qué es** — En vez de que `OrderFacade` llame a `InventoryFacade.reducirStock()`, usa los eventos nativos de Spring (Memory Pub/Sub) para no saber siquiera que el Inventario existe.
-- **Código**:
-  
-  **El Módulo Productor (Orders):**
-  ```java
-  package com.empresa.app.orders.internal;
-  // ... imports ...
-  
-  @Service
-  public class OrderService {
-  
-      private final ApplicationEventPublisher events; // Nativo de Spring
-  
-      public void createOrder(Order order) {
-          repository.save(order);
-          // Publicamos el evento al aire (memoria)
-          events.publishEvent(new OrderPlacedEvent(order.getId(), order.getProductId()));
-      }
-  }
-  ```
-  
-  **El Módulo Consumidor (Inventory):**
-  ```java
-  package com.empresa.app.inventory.internal;
-  // ... imports ...
-  
-  @Service
-  public class InventoryService {
-  
-      // Se suscribe al evento.
-      // @ApplicationModuleListener es de Modulith. Es un alias para @Async + @TransactionalEventListener.
-      // Asegura que el evento se procese asíncronamente y SOLO SI la transacción de la orden fue exitosa.
-      @ApplicationModuleListener
-      public void on(OrderPlacedEvent event) {
-          log.info("Reduciendo stock para el producto: {}", event.productId());
-          // lógica de BD...
-      }
-  }
-  ```
+@Component
+public class NotificationListener {
+    @EventListener
+    void on(OrderCreatedEvent e) { /* ... */ }
+}
+```
 
-#### 4. Documentación Auto-Generada
-Al correr el test `Documenter(modules).writeModulesAsPlantUml()`, Spring Modulith analiza tu código y genera archivos `.puml` en `target/spring-modulith-docs/`. Estos diagramas muestran exactamente qué módulo se comunica con cuál y a través de qué eventos, manteniendo tu documentación arquitectónica 100% sincronizada con tu código real (Code as Architecture).
+Ventajas:
+- `orders` no conoce `notifications`. Se puede borrar el paquete `notifications` completo y `orders` sigue compilando.
+- Agregar un nuevo consumidor (audit, email, metrics) es crear otro `@EventListener`, sin tocar `orders`.
+- Cada modulo tiene su propia frontera (`internal/`). Los detalles no se filtran.
+- Antesala natural a microservicios: cambiar `ApplicationEventPublisher` por un broker (Kafka/Rabbit) y listo (modulo 40 event-driven, modulo 41 microservicios).
 
-#### 5. Edge Cases y Errores Comunes
+## Por que NO se uso Spring Modulith
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| Inyecciones circulares (Ciclos) | Ventas llama la API de Inventario, y la API de Inventario llama a la API de Ventas | Modulith bloquea ciclos por defecto (Lanzará error en el test `verify()`). Resuelve el ciclo usando Eventos asíncronos en lugar de inyecciones de interfaz directas. |
-| Evento perdido si la app se apaga | Usaste `events.publishEvent()`, pero el servidor se reinició antes de que el Inventario terminara su hilo asíncrono | Usar Event Publication Registry (Spring Modulith JDBC). Guarda el evento en la BD temporalmente y marca si se completó. Si la app cae, al reiniciar vuelve a emitir los eventos incompletos (Transactional Outbox Pattern). |
-| ¿Pueden compartir tablas de BD? | Modulith no obliga a separar bases de datos, pero deberías separar tablas | Un Monolito Modular debe tener "límites de tabla". Ventas tiene su tabla, Inventario la suya. No hagas JOINs cruzados en JPQL; pide los datos por la Facade (API) del otro módulo. |
+Spring Modulith 1.x depende de Spring Boot 3.x. Al momento de escribir este
+modulo, **no hay version publicada compatible con Spring Boot 4.1.0**
+(`spring-modulith-bom` no resuelve contra Boot 4).
 
----
+En cuanto salga Spring Modulith 2.x (o 1.3+) compatible con Boot 4, la
+migracion es trivial:
 
-### Ejercicios
-1. Crea un proyecto con `spring-modulith-starter-core` y `spring-modulith-starter-test`.
-2. Crea una estructura de paquetes: `com.app.ventas` y `com.app.marketing`. Dentro de cada uno crea un paquete `internal`.
-3. Crea una clase en `ventas/internal/VentasLogica.java`.
-4. En `marketing/internal/MarketingService.java`, intenta inyectar/importar la clase `VentasLogica` del paso anterior.
-5. Crea el test unitario `ApplicationModules.of(App.class).verify()`. Ejecútalo en Maven y observa cómo el test FALLA (y te regaña) por violar la encapsulación, obligándote a crear una API pública en la raíz del módulo de ventas.
+1. Agregar `spring-modulith-starter-core` al `pom.xml`.
+2. Anotar cada paquete raiz de modulo con `package-info.java` y `@ApplicationModule`.
+3. Agregar un test:
+   ```java
+   @Test void verify() { ApplicationModules.of(ModulithApplication.class).verify(); }
+   ```
+   Esto valida en compilacion/test que **nadie importe `internal`** de otro modulo.
+4. Opcionalmente cambiar `@EventListener` por `@ApplicationModuleListener` para
+   obtener transacciones y reintentos automaticos.
 
-### Cómo ejecutar
+Mientras tanto, este modulo aplica los **mismos principios manualmente**:
+convencion `internal/`, comunicacion por eventos, un `@Service` publico por
+modulo.
+
+## Build
+
+```powershell
+.\build.ps1
+```
+
 ```bash
-cd 39-monolito-modular
-mvn test # Corre el test de arquitectura que valida que los muros de Modulith no estén rotos
-mvn spring-boot:run
+./build.sh
 ```
 
-### Archivos del Proyecto
-| Archivo | Propósito |
-|---------|-----------|
-| `pom.xml` | Dependencias core de Modulith. |
-| `src/test/.../ModulithTest.java` | Las pruebas obligatorias que validan la arquitectura aisalda de los paquetes. |
-| `orders/OrderPlacedEvent.java` | Evento público usado para comunicarse sin acoplamiento. |
-| `orders/internal/OrderService.java` | Publicación de eventos. |
-| `inventory/internal/InventoryService.java` | Consumo de eventos asíncronos (`@ApplicationModuleListener`). |
+Ambos scripts usan el toolchain portable en `../tools/jdk-21` y `../tools/maven`.
+
+## Tests
+
+- `ModulithApplicationTests.contextLoads` - arranca el contexto.
+- `OrderServiceTest` (`@SpringBootTest`) - crea orden real y verifica que
+  `NotificationListener.getNotified()` se incremento (prueba end-to-end de
+  la comunicacion inter-modulo via eventos).
+- `OrderControllerTest` - MockMvc **standalone**, service mockeado con
+  Mockito manual (sin `@MockBean`, sin `@WebMvcTest`).
+
+## FAQ Alumno
+
+**P: Si es un solo JAR, por que llamarlo "modular"?**
+R: Modularidad no es sinonimo de multiples JARs. Es tener **fronteras claras**
+entre dominios: un modulo puede evolucionar sin romper otros. En este proyecto
+la frontera es el paquete y la convencion `internal/`.
+
+**P: Y si alguien igual importa `orders.internal.OrderRepository` desde notifications?**
+R: Compila y funciona. Por eso Spring Modulith existe: para **fallar el build**
+si eso ocurre. Sin Modulith, la disciplina es humana + code review + reglas
+de ArchUnit si quieres automatizar.
+
+**P: Por que el evento vive en `orders.internal` y no en un paquete publico?**
+R: Trade-off. En un modulo estricto los eventos son API publica (irian a
+`orders.events`). Aqui lo dejamos "medio publico" para simplificar. En
+produccion, evento = contrato = publico.
+
+**P: `@EventListener` es sincrono, no bloquea el POST?**
+R: Si, es sincrono por defecto y corre en el mismo hilo/tx. Para asincrono
+se usa `@Async` + `@EventListener`, o `@TransactionalEventListener` para
+esperar al commit. Ver modulo 21 (async) y 40 (event-driven).
+
+**P: Cuando pasar de "monolito modular" a "microservicios"?**
+R: Cuando un modulo necesita **escalar/desplegarse/fallar** de forma independiente.
+Antes de eso, monolito modular = 90% del beneficio, 10% del costo operativo.
+Este es exactamente el mensaje del modulo 41.
+
+**P: Por que `ApplicationEventPublisher` y no un `MessageBus` propio?**
+R: Porque ya viene con Spring, es sincrono/asincrono a eleccion, y migra
+directo a `ApplicationModuleListener` de Spring Modulith cuando este soporte
+Boot 4. Reinventarlo es costo sin beneficio.

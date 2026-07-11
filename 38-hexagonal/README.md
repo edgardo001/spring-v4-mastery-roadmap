@@ -4,9 +4,9 @@
 Aprender a estructurar un proyecto de software empresarial aislando completamente la Lógica de Negocio (El Dominio) de las tecnologías externas (Bases de Datos, Controladores REST, Frameworks) utilizando la **Arquitectura Hexagonal**.
 
 ### Problema que resuelve
-En la arquitectura tradicional en 3 Capas (Controller -> Service -> Repository), la capa de negocio (Service) depende de la base de datos (Repository). 
+En la arquitectura tradicional en 3 Capas (Controller -> Service -> Repository), la capa de negocio (Service) depende de la base de datos (Repository).
 - Si quieres cambiar de MySQL a MongoDB, debes modificar el Service.
-- Si usas la anotación `@Entity` en tu modelo de negocio, tu negocio "sabe" que está usando JPA. 
+- Si usas la anotación `@Entity` en tu modelo de negocio, tu negocio "sabe" que está usando JPA.
 - Tu lógica empresarial (ej: "Solo usuarios Premium pueden hacer retiros") está tan enredada con Spring Framework, SQL y anotaciones HTTP, que es imposible de testear sin levantar todo el contexto de Spring (Tests lentos) y es imposible migrar de framework en el futuro sin reescribir todo.
 
 ### Cómo lo resuelve
@@ -20,28 +20,24 @@ Es la arquitectura estándar para sistemas Core Bancarios, Fintechs, y cualquier
 
 ```mermaid
 graph TD
-    subgraph INBOUND["Adaptadores de Entrada (Llaman al Dominio)"]
-        REST["Controlador REST (API)"]
-        CLI["Consola (CLI)"]
+    subgraph INBOUND["Adaptadores de Entrada"]
+        REST["CustomerController<br/>@RestController"]
     end
 
-    subgraph HEX["El Centro: Dominio y Casos de Uso"]
-        PU_IN(("Puerto de Entrada<br/>Interface"))
-        DOM["Lógica de Negocio Pura<br/>Clases Java Sin Frameworks"]
-        PU_OUT(("Puerto de Salida<br/>Interface"))
+    subgraph HEX["El Hexágono (Dominio + Application)"]
+        PU_IN(("RegisterCustomerUseCase<br/>Interface"))
+        DOM["CustomerService<br/>+ Customer record"]
+        PU_OUT(("CustomerRepositoryPort<br/>Interface"))
     end
 
-    subgraph OUTBOUND["Adaptadores de Salida (Son llamados por el Dominio)"]
-        DB["Repositorio JPA (Postgres)"]
-        KAFKA["Productor de Kafka"]
+    subgraph OUTBOUND["Adaptadores de Salida"]
+        DB["InMemoryCustomerRepository<br/>@Component"]
     end
 
     REST --> PU_IN
-    CLI --> PU_IN
     PU_IN --> DOM
     DOM --> PU_OUT
     PU_OUT --> DB
-    PU_OUT --> KAFKA
 
     style HEX fill:#e6fcf5,stroke:#20c997,stroke-width:2px,color:#000
     style INBOUND fill:#fff0f6,stroke:#f06595
@@ -52,189 +48,154 @@ graph TD
 
 ### Glosario Básico
 
-#### `Dominio (Domain)`
-El corazón del hexágono. Contiene las reglas estrictas de tu negocio. Son clases Java (POJOs o Records) sin una sola anotación de Spring o JPA. (Ej: `Factura`, `Usuario`).
-
-#### `Casos de Uso (Application Service / Use Cases)`
-La lógica de orquestación pura. Aquí ocurre el flujo (Ej: "Recibir petición -> Validar fondos en el Dominio -> Guardar en el Puerto -> Retornar respuesta").
-
-#### `Puerto (Port)`
-Una simple **Interfaz de Java** que reside dentro del hexágono.
-- **Port de Entrada (Inbound/Primary):** Define lo que el exterior le puede pedir al hexágono.
-- **Port de Salida (Outbound/Secondary):** Define lo que el hexágono necesita del exterior (Ej: `interface UserRepository`).
-
-#### `Adaptador (Adapter)`
-Las clases que residen **fuera** del hexágono.
-- **Inbound Adapter:** Un `@RestController` de Spring que "adapta" una petición HTTP y llama al Puerto de Entrada.
-- **Outbound Adapter:** Un archivo que implementa el Puerto de Salida. Usa JPA, Kafka, o `RestClient` para comunicarse con el mundo exterior.
+- **Dominio (Domain)**: corazón del hexágono. Java 100% puro (record `Customer`, interfaces puerto). Sin Spring.
+- **Application**: implementación de los casos de uso (`CustomerService`). Un poco menos puro (lleva `@Service`).
+- **Puerto de Entrada (Primary/Inbound)**: interfaz que expone lo que el hexágono ofrece al exterior (`RegisterCustomerUseCase`).
+- **Puerto de Salida (Secondary/Outbound)**: interfaz que expone lo que el hexágono necesita del exterior (`CustomerRepositoryPort`).
+- **Adaptador de Entrada**: quien llama al hexágono desde afuera (`CustomerController` HTTP).
+- **Adaptador de Salida**: quien implementa el puerto de salida (`InMemoryCustomerRepository`).
 
 ---
 
-### Conceptos
+### Estructura del proyecto
 
-#### 1. Estructura de Paquetes
-En lugar de la clásica estructura técnica (`controller/`, `service/`, `repository/`), estructuramos el código separando el interior del exterior:
-```text
-src/main/java/com/app/
-├── domain/                    # EL HEXÁGONO (Sin dependencias de Spring!)
-│   ├── model/                 # POJOs del negocio (User, Order)
-│   ├── port/
-│   │   ├── in/                # Interfaces de Casos de Uso
-│   │   └── out/               # Interfaces para la persistencia
-│   └── usecase/               # Implementación de los Puertos de Entrada
-└── infrastructure/            # EL EXTERIOR (Todo Spring va aquí)
-    ├── adapter/
-    │   ├── in/
-    │   │   └── web/           # Controladores REST (Spring MVC)
-    │   └── out/
-    │       └── persistence/   # Entidades JPA, JpaRepository y Mappers
-    └── config/                # @Configuration y inyección de beans
+```
+src/main/java/com/springroadmap/hexagonal/
+├── HexagonalApplication.java
+├── domain/                                          # HEXÁGONO PURO (sin Spring)
+│   ├── model/Customer.java                          # record de dominio
+│   └── port/
+│       ├── in/RegisterCustomerUseCase.java          # Primary Port
+│       └── out/CustomerRepositoryPort.java          # Secondary Port
+├── application/
+│   └── service/CustomerService.java                 # implementa RegisterCustomerUseCase
+└── adapter/
+    ├── in/web/CustomerController.java               # @RestController
+    └── out/persistence/InMemoryCustomerRepository.java  # @Component
 ```
 
-#### 2. El Centro del Hexágono (Puro y Limpio)
-- **Qué es** — El código de negocio que nunca cambia aunque migres de PostgreSQL a DynamoDB.
-- **Código** — Nótese la AUSENCIA de `@Entity`, `@Id`, o `@Service`.
-  ```java
-  // 1. EL MODELO (domain/model/User.java)
-  public class User {
-      private Long id;
-      private String name;
-      private Double balance;
-  
-      // Regla de Negocio (Encapsulación)
-      public void withdraw(Double amount) {
-          if (this.balance < amount) throw new BusinessException("Sin fondos");
-          this.balance -= amount;
-      }
-  }
-  
-  // 2. EL PUERTO DE SALIDA (domain/port/out/UserRepositoryPort.java)
-  // El dominio dicta las reglas, no sabe de JPA
-  public interface UserRepositoryPort {
-      User findById(Long id);
-      void save(User user);
-  }
-  
-  // 3. EL CASO DE USO (domain/usecase/WithdrawUseCase.java)
-  // Orquesta la acción. No lleva @Service.
-  public class WithdrawUseCase {
-      private final UserRepositoryPort userRepositoryPort;
-  
-      // Inyección por constructor clásica (Java puro)
-      public WithdrawUseCase(UserRepositoryPort userRepositoryPort) {
-          this.userRepositoryPort = userRepositoryPort;
-      }
-  
-      public void execute(Long userId, Double amount) {
-          User user = userRepositoryPort.findById(userId); // Trae el dominio
-          user.withdraw(amount);                           // Ejecuta regla
-          userRepositoryPort.save(user);                   // Guarda el estado
-      }
-  }
-  ```
+---
 
-#### 3. Los Adaptadores de Salida (Infraestructura)
-- **Qué es** — El mundo real. Aquí sí usas `@Entity`, conectas a la Base de Datos, y traduces (mapeas) el objeto de Base de Datos al objeto del Dominio.
-- **Código**:
-  ```java
-  // 1. LA ENTIDAD DE BD (infrastructure/adapter/out/persistence/UserJpaEntity.java)
-  @Entity
-  @Table(name = "users")
-  public class UserJpaEntity {
-      @Id @GeneratedValue
-      private Long id;
-      private String name;
-      private Double balance;
-      // Getters y Setters...
-  }
-  
-  // 2. EL ADAPTADOR (infrastructure/adapter/out/persistence/UserRepositoryAdapter.java)
-  // Esta clase IMPLEMENTA el puerto que el Dominio requiere
-  @Component
-  public class UserRepositoryAdapter implements UserRepositoryPort {
-      
-      private final SpringDataUserRepository jpaRepo; // Tu JpaRepository clásico
-      
-      public UserRepositoryAdapter(SpringDataUserRepository jpaRepo) {
-          this.jpaRepo = jpaRepo;
-      }
-  
-      @Override
-      public User findById(Long id) {
-          UserJpaEntity entity = jpaRepo.findById(id).orElseThrow();
-          return UserMapper.toDomain(entity); // TRADUCE BD -> Dominio puro
-      }
-  
-      @Override
-      public void save(User user) {
-          UserJpaEntity entity = UserMapper.toEntity(user); // TRADUCE Dominio -> BD
-          jpaRepo.save(entity);
-      }
-  }
-  ```
+### Antes vs Ahora
 
-#### 4. Los Adaptadores de Entrada y la Inyección de Spring
-- **Qué es** — El Controlador recibe el HTTP y se lo pasa al Dominio. Como el Dominio no tiene `@Service`, necesitamos un `@Configuration` manual en la Infraestructura para crear el Bean e inyectarlo.
-- **Código**:
-  ```java
-  // 1. LA INYECCIÓN MANUAL (infrastructure/config/DomainConfig.java)
-  @Configuration
-  public class DomainConfig {
-      
-      @Bean
-      public WithdrawUseCase withdrawUseCase(UserRepositoryPort port) {
-          // Instanciamos el POJO pasándole la implementación real (Adapter)
-          return new WithdrawUseCase(port); 
-      }
-  }
-  
-  // 2. EL CONTROLADOR (infrastructure/adapter/in/web/UserController.java)
-  @RestController
-  public class UserController {
-      private final WithdrawUseCase withdrawUseCase;
-  
-      public UserController(WithdrawUseCase withdrawUseCase) {
-          this.withdrawUseCase = withdrawUseCase;
-      }
-  
-      @PostMapping("/withdraw")
-      public ResponseEntity<Void> withdraw(@RequestBody WithdrawRequest request) {
-          withdrawUseCase.execute(request.userId(), request.amount());
-          return ResponseEntity.ok().build();
-      }
-  }
-  ```
+**Antes (3 capas clásicas):**
 
-#### 5. Edge Cases y Errores Comunes
+```java
+@RestController
+class CustomerController {
+    private final CustomerService service;   // <-- depende de la clase concreta
+    // ...
+}
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| Poner un Import de Spring en el Dominio | Usar `@Service` o `@Transactional` en las clases de Dominio/Use Cases | ¡Sacrilegio arquitectónico! El dominio debe ser Java 100% puro. El `@Transactional` va en el Use Case? No, va en el Adaptador de Entrada (Controller o un Proxy de aplicación), o se crea un decorador en la Infraestructura. |
-| Clases Mappers Inmanejables | Traducir de `JpaEntity` a `Domain` y a `Dto` a mano | Usa librerías de mapeo automáticas (MapStruct, Módulo 09) en la capa de infraestructura para mantener el código de los Adapters limpio. |
-| Sobrecoste en Proyectos Pequeños | Crear 3 interfaces, 2 mappers y 3 clases para hacer un simple CRUD de "Marcas de Autos" | La Hexagonal (y el DDD) NO es para todo. Está pensada para **Dominio Complejo** (Ej: Seguros, Banca). Aplicarla a un CRUD simple generará un exceso de archivos (Over-engineering). |
+@Service
+class CustomerService {
+    private final CustomerRepository repo;   // <-- CustomerRepository extends JpaRepository
+    // el service SABE que hay JPA. Testear = arrancar contexto Spring.
+}
+```
+
+Problemas:
+- El Controller depende de una clase concreta.
+- El Service depende de JPA (imposible testear sin arrancar Spring).
+- Migrar de MySQL a Mongo obliga a tocar el Service.
+
+**Ahora (Hexagonal):**
+
+```java
+@RestController
+class CustomerController {
+    private final RegisterCustomerUseCase useCase;   // <-- INTERFAZ
+}
+
+@Service
+class CustomerService implements RegisterCustomerUseCase {
+    private final CustomerRepositoryPort port;       // <-- INTERFAZ
+    // el service NO sabe qué hay del otro lado del port.
+}
+
+@Component
+class InMemoryCustomerRepository implements CustomerRepositoryPort { ... }
+```
+
+Ventajas:
+- El controlador se testea con un mock manual del `RegisterCustomerUseCase`.
+- El service se testea como POJO puro con un mock del `CustomerRepositoryPort` (0 ms, sin Spring).
+- Cambiar la persistencia = escribir otra clase que implemente el port. Cero cambios en el dominio.
+
+**Antes vs Ahora en sintaxis Java aplicada al módulo:**
+
+| Tema | Antes (Java 8) | Ahora (Java 21) |
+|------|----------------|-----------------|
+| Modelo de dominio | `class Customer { ...30 líneas de getters/setters... }` | `public record Customer(Long id, String name, String email) { }` |
+| DTO de request | Clase POJO con getters/setters | `public record RegisterCustomerRequest(String name, String email) { }` |
+| Ausencia de valor | `Customer findById(Long id)` que devuelve `null` | `Optional<Customer> findById(Long id)` |
+| Inyección | `@Autowired` sobre el campo | Constructor injection (recomendado desde Spring 4.3+) |
+
+---
+
+### FAQ del Alumno
+
+**P: ¿Por qué mi record `Customer` no lleva `@Entity`?**
+R: Porque `@Entity` es de JPA. Si lo pones, el dominio "sabe" que existe una BD relacional. Rompes hexagonal. La solución real es crear una clase `CustomerJpaEntity` aparte en el adaptador de persistencia y mapear.
+
+**P: ¿Por qué el `CustomerController` depende de la interfaz y no de `CustomerService` directamente?**
+R: Para poder mockear el use case en tests. Y para poder cambiar la implementación (por ejemplo, una versión async) sin tocar el controlador.
+
+**P: ¿La interfaz `CustomerRepositoryPort` no debería estar junto a su implementación?**
+R: No. Vive en `domain/port/out` porque el DOMINIO es quien dicta el contrato. La implementación vive afuera, en el adaptador. Esta "inversión" es lo que permite que la flecha de dependencia apunte siempre HACIA el dominio, nunca desde el dominio hacia afuera.
+
+**P: ¿Puedo poner `@Service` en el use case dentro de `domain/`?**
+R: Puristas dirían que no (rompe la pureza). Aquí lo pusimos en `application/` como pragmatismo: el paquete `domain` queda 100% puro (modelo + puertos), y `application` puede llevar anotaciones Spring. Otra escuela sería tener un `@Configuration` en infraestructura que registra el use case como `@Bean` manual.
+
+**P: ¿No es demasiado archivo para un CRUD simple?**
+R: Sí. Hexagonal está pensada para **dominio complejo** (banca, seguros, sistemas core). Aplicarla a un CRUD de "Marcas de Autos" es sobre-ingeniería. La usas cuando el negocio tiene reglas ricas y esperas que el sistema viva 10+ años.
+
+**P: ¿Cómo testeo el `CustomerService` sin Spring?**
+R: Ver `CustomerServiceTest`. Es un test JUnit puro que hace `new CustomerService(mockPortManual)` y verifica el comportamiento. Ejecuta en milisegundos.
+
+**P: ¿Por qué el mock del port se hace a mano y no con Mockito?**
+R: Puedes usar Mockito perfectamente. Aquí lo hicimos a mano (con una clase anónima) para demostrar que la arquitectura hexagonal NO NECESITA librerías de mocking: si tus dependencias son interfaces puras, cualquier `new CustomerRepositoryPort() { ... }` es un mock válido.
 
 ---
 
 ### Ejercicios
-1. Crea la estructura de carpetas indicada (`domain`, `infrastructure`).
-2. En `domain/model`, crea la clase `CuentaBancaria` con métodos de negocio (NO Setters) como `depositar()` y `retirar()`. Que sea Java puro.
-3. En `domain/port/out`, crea la interfaz `CuentaPort`. En `domain/port/in`, crea `OperacionCuentaUseCase` (Interfaz) y su implementación `OperacionCuentaService`.
-4. Sal del Hexágono. En `infrastructure/adapter/out/persistence`, crea tu Entidad JPA, tu `JpaRepository` y el `CuentaAdapter` que implemente `CuentaPort`. Usa mappers manuales.
-5. Escribe un Unit Test para el Dominio. Nota cómo puedes testear TODA la regla de negocio instanciando un `new OperacionCuentaService(...)` inyectándole un MOCK de `CuentaPort`, ejecutándose en 1 milisegundo sin cargar Spring Boot.
+1. Añade un puerto de entrada nuevo `FindCustomerUseCase` con `Optional<Customer> findById(Long id)` y su implementación en `CustomerService`. Expón `GET /api/customers/{id}` en el controlador.
+2. Crea un segundo adaptador de salida `JpaCustomerRepository` (dependencia H2 + JPA) que también implemente `CustomerRepositoryPort`. Usa `@Profile("jpa")` para elegir cuál activar. Ve cómo el dominio no cambia una sola línea.
+3. Añade una regla de negocio al `CustomerService`: rechazar emails que no contengan `@`. Escribe el test unitario POJO correspondiente ANTES de escribir el código (TDD).
+4. Escribe un adaptador de entrada CLI (`CommandLineRunner`) que registre un cliente al arrancar. Observa que también depende de `RegisterCustomerUseCase`, no de `CustomerService`.
 
 ### Cómo ejecutar
+
 ```bash
 cd 38-hexagonal
-mvn spring-boot:run
 
-# Probar la arquitectura aislando capas
-curl -X POST http://localhost:8080/api/cuentas/1/retiro -H "Content-Type: application/json" -d '{"monto": 50}'
+# Build (usa toolchain portable de la raíz del roadmap)
+./build.sh          # Git Bash / Linux / macOS
+./build.ps1         # PowerShell (Windows)
+
+# Ejecutar el fat JAR
+java -jar target/hexagonal-1.0.0.jar
+
+# Probar
+curl -X POST http://localhost:8080/api/customers \
+     -H "Content-Type: application/json" \
+     -d '{"name":"Juan","email":"juan@x.com"}'
 ```
 
 ### Archivos del Proyecto
+
 | Archivo | Propósito |
 |---------|-----------|
-| `domain/model/User.java` | Lógica pura y encapsulada. |
-| `domain/usecase/WithdrawUseCase.java` | Orquestación libre de dependencias. |
-| `infrastructure/adapter/out/persistence/...` | Implementación real hacia Base de Datos con JPA y Mappers. |
-| `infrastructure/config/BeanConfig.java` | Inyección de dependencias programática uniendo el Dominio con la Infraestructura. |
+| `pom.xml` | Coordenadas Maven + Spring Boot 4.1.0 + Java 21. Fat JAR `hexagonal-1.0.0.jar`. |
+| `HexagonalApplication.java` | Punto de entrada (`@SpringBootApplication`). |
+| `domain/model/Customer.java` | Record de dominio 100% puro (sin Spring). |
+| `domain/port/in/RegisterCustomerUseCase.java` | Puerto de entrada (interfaz). |
+| `domain/port/out/CustomerRepositoryPort.java` | Puerto de salida (interfaz). |
+| `application/service/CustomerService.java` | Implementación del use case. `@Service`. |
+| `adapter/in/web/CustomerController.java` | Adaptador de entrada HTTP. Depende de la interfaz. |
+| `adapter/out/persistence/InMemoryCustomerRepository.java` | Adaptador de salida en memoria. |
+| `resources/application.yml` | Configuración + hardening de mensajes de error. |
+| `HexagonalApplicationTests.java` | `contextLoads` — valida cableado de todos los beans. |
+| `CustomerServiceTest.java` | Test UNITARIO POJO puro. Mock manual del port. Sin Spring. |
+| `CustomerControllerTest.java` | Test MockMvc standalone con mock manual del use case. |
+| `build.sh` / `build.ps1` | Scripts que fijan JAVA_HOME al JDK 21 portable y llaman a Maven 3.9.16. |

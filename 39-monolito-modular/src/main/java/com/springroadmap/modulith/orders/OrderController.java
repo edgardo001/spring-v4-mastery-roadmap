@@ -1,0 +1,27 @@
+package com.springroadmap.modulith.orders;
+
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Controller HTTP para el modulo orders.
+ * Vive DENTRO del modulo orders (no en un paquete web global) para respetar
+ * la cohesion modular: cada modulo expone su propio adaptador HTTP.
+ */
+@RestController
+@RequestMapping("/api/orders")
+public class OrderController {
+
+    private final OrderService orderService;
+
+    public OrderController(OrderService orderService) {
+        this.orderService = orderService;
+    }
+
+    @PostMapping
+    public Order create(@RequestParam String customer) {
+        return orderService.createOrder(customer);
+    }
+}

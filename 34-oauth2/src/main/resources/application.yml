@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: oauth2
+server:
+  port: 0        # 0 = puerto aleatorio para no chocar en dev; @LocalServerPort lo descubre en tests.
+                 # En producción fija p.ej. 8080.
+logging:
+  level:
+    org.springframework.security: INFO

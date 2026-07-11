@@ -1,171 +1,172 @@
-## 34 — OAuth2 y OIDC (Social Login: Login con Google / GitHub)
+# Módulo 34 — OAuth2 Resource Server con JWT
 
-### Propósito
-Aprender a delegar la autenticación de tus usuarios a proveedores de identidad gigantes como Google, GitHub, Microsoft o Facebook, utilizando los protocolos estándar de la industria: **OAuth 2.0** y **OpenID Connect (OIDC)**.
+## Propósito
+Aprender a proteger una API REST como **OAuth2 Resource Server** validando **JWT**
+firmados. Es el patrón estándar de seguridad de microservicios modernos: stateless,
+escalable horizontal y desacoplado del Identity Provider (IdP).
 
-### Problema que resuelve
-- **Fricción para el usuario:** Rellenar formularios de registro, crear contraseñas seguras, verificar correos electrónicos... Muchos usuarios abandonan tu aplicación antes de terminar este proceso.
-- **Riesgo de seguridad (Breaches):** Si gestionas tus propias contraseñas en tu base de datos y te hackean, eres responsable de la filtración de credenciales. Además, tienes que implementar la recuperación de contraseñas, validación de complejidad, etc.
+## Problema que resuelve
+Las sesiones + cookie (módulo 13) obligan a mantener estado en el servidor
+(`HttpSession`), no escalan sin *sticky sessions* y acoplan el frontend al backend
+por el dominio de la cookie. Con **JWT** el cliente lleva su credencial firmada;
+cualquier instancia del backend la valida solo con la clave pública/secreta.
 
-### Cómo lo resuelve
-En lugar de pedirle una contraseña al usuario, lo rediriges a la página oficial de Google. Él inicia sesión en Google de forma segura (con biometría o 2FA). Si tiene éxito, Google lo redirige de vuelta a tu aplicación enviándote un "Token" que te garantiza quién es esa persona, su nombre real y su correo electrónico verificado.
+## Cómo lo resuelve Spring
+- `spring-boot-starter-oauth2-resource-server` + `oauth2ResourceServer(o -> o.jwt())`
+  activa el filtro que extrae `Authorization: Bearer <jwt>` y lo valida.
+- Un `JwtDecoder` (Nimbus JOSE JWT) verifica firma y expiración.
+- El controller recibe el token decodificado como `@AuthenticationPrincipal Jwt`.
 
-### Por qué aprenderlo
-El "Social Login" es el estándar de facto para aplicaciones modernas orientadas al consumidor (B2C) y corporativas (SSO corporativo con Azure AD). Spring Security tiene un soporte nativo brutal para OAuth2, reduciendo cientos de líneas de código complejo (validación criptográfica, manejo de redirecciones) a unas simples líneas de configuración en un YAML.
+## Por qué aprenderlo
+Es la base de cualquier arquitectura moderna con Keycloak, Auth0, Cognito, Okta,
+Azure AD, etc. Entender el flujo con clave HMAC embebida (esta demo) te prepara
+para el flujo real con JWKS público de un IdP externo.
+
+## Diagrama
 
 ```mermaid
-sequenceDiagram
-    participant User as Usuario / Navegador
-    participant App as Tu App (Spring Boot)
-    participant Google as Proveedor OAuth2 (Google)
+flowchart LR
+    C[Cliente]
+    A["/api/auth/token<br/>(TokenService)"]:::open
+    P["/api/public/**"]:::open
+    R["/api/me<br/>(protegido)"]:::secure
+    D[JwtDecoder<br/>HMAC HS256]:::secure
 
-    User->>App: 1. Click en "Login con Google"
-    App-->>User: 2. HTTP 302 Redirige a google.com/oauth
-    
-    User->>Google: 3. Ingresa sus credenciales de Google
-    Google-->>User: 4. HTTP 302 Redirige a tu App con un '?code=XYZ'
-    
-    User->>App: 5. Accede a tu endpoint callback con el código XYZ
-    App->>Google: 6. Backend a Backend: "Toma el código XYZ, dame los datos"
-    Google-->>App: 7. Entrega el Token OIDC (Email, Nombre, Foto)
-    
-    App->>App: 8. Spring crea un SecurityContext autenticado
-    App-->>User: 9. Bienvenido a la app!
+    C -- "POST username" --> A
+    A -- "JWT firmado" --> C
+    C -- "GET sin token" --> P
+    C -- "GET + Bearer JWT" --> R
+    R -. "valida firma" .- D
+
+    classDef open fill:#c8f7c5,stroke:#2e7d32,color:#000
+    classDef secure fill:#ffe0b2,stroke:#e65100,color:#000
 ```
 
----
+## Glosario Básico
+| Término | Qué es |
+|--------|--------|
+| **JWT** | JSON Web Token: `header.payload.signature` en Base64URL. |
+| **HS256** | Firma HMAC con SHA-256 usando clave secreta compartida. |
+| **Resource Server** | Servicio que valida tokens emitidos por un Authorization Server. |
+| **Claim** | Campo dentro del payload (p.ej. `sub`, `iss`, `exp`, `scope`). |
+| **Bearer** | Esquema del header `Authorization: Bearer <token>`. |
 
-### Glosario Básico
+## Conceptos clave
 
-#### `OAuth 2.0`
-Protocolo de **Autorización**. Creado para que una aplicación externa (Tu App) pueda acceder a datos de una plataforma (Fotos de Google) sin que el usuario te dé su contraseña.
+### 1. `oauth2ResourceServer(o -> o.jwt())`
+- **Qué es:** activa el filtro `BearerTokenAuthenticationFilter`.
+- **Por qué importa:** una sola línea reemplaza toda la infraestructura clásica
+  de sesiones + login form.
+- **Analogía:** cambiar el guardia que consulta un archivador (sesión) por uno
+  que solo verifica un sello (firma del JWT).
 
-#### `OpenID Connect (OIDC)`
-Protocolo de **Autenticación** montado encima de OAuth2. Mientras OAuth2 es para "dar permisos", OIDC es específicamente para responder a la pregunta "¿Quién es este usuario?". Utiliza JWT para empaquetar los datos de identidad.
+### 2. `NimbusJwtDecoder.withSecretKey(...)`
+- Construye el validador HS256 con la misma clave que firma.
+- En producción se cambia a `withJwkSetUri(...)` apuntando al `/.well-known/jwks.json`
+  del IdP (Keycloak/Auth0/Cognito).
 
-#### `Client ID` y `Client Secret`
-Las credenciales que Google o GitHub te otorgan al registrar tu aplicación en su portal de desarrolladores. Tu app en Spring las usa para identificarse ante el proveedor.
+### 3. `@AuthenticationPrincipal Jwt jwt`
+- Inyecta el token ya decodificado en el método del controller.
+- `jwt.getSubject()`, `jwt.getClaim("scope")`, `jwt.getExpiresAt()`.
 
-#### `Callback / Redirect URI`
-La URL exacta de tu aplicación a la cual Google redirigirá al usuario después de que inicie sesión exitosamente. En Spring Boot suele ser `http://localhost:8080/login/oauth2/code/google`.
+## Antes vs Ahora
 
----
+| Aspecto | ANTES (módulo 13, sesión + cookie) | AHORA (módulo 34, OAuth2 + JWT) |
+|---|---|---|
+| Estado en servidor | `HttpSession` (memoria/Redis) | Ninguno (stateless) |
+| Escalabilidad | Requiere sticky sessions | Cualquier nodo valida cualquier token |
+| Credencial en cada request | `Cookie: JSESSIONID=...` | `Authorization: Bearer <jwt>` |
+| Login | `formLogin()` + password | POST `/api/auth/token` (real: IdP externo) |
+| CSRF | Necesario (cookie) | No aplica (header manual) |
+| Sintaxis Spring Sec | `http.formLogin().and().httpBasic()` | `http.oauth2ResourceServer(o -> o.jwt())` |
+| Java 8 | Clases anónimas `new Customizer<>() {...}` | Lambdas `authz -> authz. ...` |
+| Java 8 respuestas | `new HashMap<>()` + `put()` | `Map.of("k","v")` inmutable |
 
-### Conceptos
+## FAQ del Alumno
 
-#### 1. Consiguiendo las Credenciales (Ej: GitHub)
-Antes de escribir código, debes crear una "Aplicación OAuth" en el panel de desarrollador de GitHub o en la Consola Cloud de Google.
-1. Vas a `GitHub > Settings > Developer Settings > OAuth Apps`.
-2. Haces click en "New OAuth App".
-3. **Homepage URL:** `http://localhost:8080`
-4. **Authorization callback URL:** `http://localhost:8080/login/oauth2/code/github`
-5. GitHub te dará un `Client ID` y un `Client Secret`. **(NUNCA subas el secret al repositorio de código)**.
+**¿Puedo probar sin Keycloak?**
+Sí, esta demo firma tokens con clave HMAC embebida. En prod NO harías esto.
 
-#### 2. Configurando Spring Boot
-- **Qué es** — Spring Boot autoconfigura toda la danza de redirecciones (el flujo Authorization Code Grant) si le provees las credenciales.
-- **Código** — Configuración en `.yml`:
-  ```xml
-  <!-- En pom.xml -->
-  <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-oauth2-client</artifactId>
-  </dependency>
-  ```
-  ```yaml
-  # application.yml
-  spring:
-    security:
-      oauth2:
-        client:
-          registration:
-            # Puedes tener múltiples proveedores a la vez
-            github:
-              client-id: tu-client-id-de-github
-              client-secret: tu-secret-de-github # En prod: ${GITHUB_SECRET}
-            google:
-              client-id: tu-client-id-de-google
-              client-secret: tu-secret-de-google
-  ```
-  *Nota: Google, GitHub, Facebook y Okta ya vienen "pre-mapeados" en Spring. Sabe exactamente a qué URLs ir.*
+**¿Qué diferencia hay entre HS256 y RS256?**
+HS256 = una sola clave secreta (simétrica). RS256 = par pública/privada
+(asimétrica). Los IdP reales usan RS256 y publican la clave pública en JWKS.
 
-#### 3. Configurando Spring Security
-- **Qué es** — Solo debes decirle al `SecurityFilterChain` que active el login por OAuth2 en lugar del viejo formulario con usuario y contraseña (o junto a él).
-- **Código**:
-  ```java
-  @Configuration
-  @EnableWebSecurity
-  public class SecurityConfig {
-  
-      @Bean
-      public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-          http
-              .authorizeHttpRequests(auth -> auth
-                  .requestMatchers("/", "/public").permitAll()
-                  .anyRequest().authenticated()
-              )
-              // ¡Esta línea hace la magia!
-              .oauth2Login(oauth2 -> oauth2
-                  .defaultSuccessUrl("/dashboard", true) // A donde ir tras el login exitoso
-              );
-              
-          return http.build();
-      }
-  }
-  ```
-  Si entras a `http://localhost:8080/dashboard`, como no estás autenticado, Spring te redirigirá a una pantalla generada automáticamente con los botones "Login with Google" y "Login with GitHub".
+**¿Dónde guardo el JWT en el cliente?**
+Nunca en `localStorage` (vulnerable a XSS). Prefiere cookie `HttpOnly; Secure; SameSite=Strict`
+o memoria + refresh token corto.
 
-#### 4. Extrayendo los Datos del Usuario
-- **Qué es** — Una vez logueado, necesitas extraer el nombre, email o foto para guardarlo en tu base de datos o mostrarlo en la interfaz.
-- **Código** — Controlador inyectando el usuario autenticado:
-  ```java
-  @RestController
-  public class UserController {
-  
-      @GetMapping("/dashboard")
-      public String dashboard(@AuthenticationPrincipal OAuth2User oauth2User) {
-          
-          // oauth2User.getAttributes() contiene todo el JSON que devolvió Google/GitHub
-          String nombre = oauth2User.getAttribute("name");
-          String email = oauth2User.getAttribute("email");
-          String foto = oauth2User.getAttribute("avatar_url"); // GitHub
-          // String foto = oauth2User.getAttribute("picture"); // Google
-          
-          return "Bienvenido " + nombre + " (" + email + ")";
-      }
-  }
-  ```
+**¿Puedo invalidar un JWT antes de que expire?**
+No de forma nativa: es stateless. Se resuelve con TTL cortos + refresh tokens
+o lista negra en Redis.
 
-#### 5. Edge Cases y Errores Comunes
+**¿Necesito el AuthorizationServer de Spring?**
+Solo si TÚ emites tokens para terceros. Si delegás en Keycloak/Auth0/Cognito,
+tu servicio solo es Resource Server (como este módulo).
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| `redirect_uri_mismatch` en Google/GitHub | La URL en el portal de desarrolladores no coincide exactamente con la que tu servidor envió. | Asegúrate de registrar EXACTAMENTE `http://localhost:8080/login/oauth2/code/google` (o el proveedor que sea). Ojo con el `/` al final y con http vs https. |
-| El `email` viene como `null` (GitHub) | En GitHub, si el usuario tiene su email puesto como "privado", la API pública no lo devuelve. | Debes usar un flujo especial. Primero atrapar la autenticación exitosa creando un `OAuth2UserService` personalizado, y usar el token obtenido para hacer un request extra a la API `/user/emails` de Github. |
-| Mezclar JWT Stateless con OAuth2 Login | Quieres usar OAuth2 pero tienes una API React/Angular separada. | El `oauth2Login()` de Spring está diseñado para aplicaciones monolíticas (usa cookies `JSESSIONID` tras bambalinas). Si quieres una API 100% Stateless con React, el Frontend debe hacer el flujo OAuth2 y enviarle a Spring Boot el *IdToken* JWT de Google. Spring Boot usará la dependencia `oauth2-resource-server` para validar la firma de ese JWT. |
+**¿Por qué la clave debe tener >= 32 bytes?**
+HS256 exige 256 bits mínimo. Nimbus lanza `IllegalArgumentException` si es más corta.
 
----
+## Ejercicios
+1. Cambia HS256 por RS256: genera un par RSA y usa `NimbusJwtDecoder.withPublicKey(...)`.
+2. Añade un endpoint `/api/admin/**` que exija `scope=admin` con
+   `@PreAuthorize("hasAuthority('SCOPE_admin')")`.
+3. Reduce el TTL a 60 segundos y verifica que el test falla con token expirado.
+4. Sustituye el HMAC embebido por Keycloak local (Docker) y `issuer-uri` en YAML.
 
-### Ejercicios
-1. Ve a GitHub y crea una OAuth App (Settings -> Developer Settings). Obtén tu ID y Secret.
-2. Agrega las dependencias de `spring-boot-starter-security` y `spring-boot-starter-oauth2-client`.
-3. Pega tus credenciales en el `application.yml` (sección `spring.security.oauth2.client.registration.github`).
-4. Crea un `@RestController` con un endpoint `/perfil` que retorne todo el mapa de atributos del usuario: `return oauth2User.getAttributes();`.
-5. Ejecuta la aplicación y entra a `http://localhost:8080/perfil`. Serás redirigido a GitHub. Autoriza la aplicación y observa el JSON enorme que Github le entregó a tu aplicación (Nombre, bio, empresa, avatar).
+## Cómo ejecutar
 
-### Cómo ejecutar
+### Windows (PowerShell)
+```powershell
+.\build.ps1
+java -jar target\oauth2-1.0.0.jar
+```
+
+### Git Bash / Linux
 ```bash
-cd 34-oauth2
-mvn spring-boot:run
-
-# Abre el navegador en:
-# http://localhost:8080
-# NOTA: Debes usar un navegador real, CURL no funciona porque requiere interacción de login visual.
+./build.sh
+java -jar target/oauth2-1.0.0.jar
 ```
 
-### Archivos del Proyecto
-| Archivo | Propósito |
-|---------|-----------|
-| `pom.xml` | Dependencias de Security y OAuth2 Client. |
-| `application.yml` | Declaración de proveedores (Google/GitHub) e inyección de credenciales. |
-| `config/SecurityConfig.java` | Activación de `.oauth2Login()`. |
-| `controller/HomeController.java` | Extracción de datos del perfil usando `@AuthenticationPrincipal OAuth2User`. |
+### Solo tests
+```bash
+../apache-maven-3.9.16/bin/mvn -f 34-oauth2/pom.xml test
+```
+
+### Probar manualmente (una vez arrancado)
+```bash
+# 1. Endpoint público
+curl http://localhost:PORT/api/public/hello
+
+# 2. Obtener token
+TOKEN=$(curl -s -X POST "http://localhost:PORT/api/auth/token?username=alice" | jq -r .access_token)
+
+# 3. Endpoint protegido
+curl -H "Authorization: Bearer $TOKEN" http://localhost:PORT/api/me
+```
+
+## Archivos del Proyecto
+
+| Archivo | Rol |
+|---|---|
+| `pom.xml` | Coordenadas Maven + starter oauth2-resource-server. |
+| `src/main/java/.../Application.java` | Bootstrap Spring Boot. |
+| `src/main/java/.../config/SecurityConfig.java` | Filter chain, permitAll público, JwtDecoder HS256. |
+| `src/main/java/.../auth/TokenService.java` | Emite JWT firmados con Nimbus. |
+| `src/main/java/.../auth/AuthController.java` | POST `/api/auth/token`. |
+| `src/main/java/.../web/PublicController.java` | GET `/api/public/hello`. |
+| `src/main/java/.../web/PrivateController.java` | GET `/api/me` (requiere JWT). |
+| `src/main/resources/application.yml` | Configuración de puerto y logging. |
+| `src/test/java/.../ApplicationTests.java` | Smoke test `contextLoads`. |
+| `src/test/java/.../OAuth2IntegrationTest.java` | E2E con RestClient + `@LocalServerPort`. |
+| `build.ps1` / `build.sh` | Scripts con toolchain portable (JDK 21 + Maven 3.9.16). |
+
+## Nota de producción — NO uses este código como IdP real
+Este módulo firma tokens con **clave HMAC embebida** solo para enseñar el flujo
+completo (emisión + validación) sin dependencias externas. En un sistema real:
+
+- **La emisión** la hace un **Authorization Server dedicado**: Keycloak (open
+  source), Auth0, AWS Cognito, Okta, Azure AD, Google Identity Platform.
+- **Tu servicio** es Resource Server puro: NO emite tokens, solo los valida
+  contra el JWKS público del IdP (`spring.security.oauth2.resourceserver.jwt.issuer-uri`).
+- Los tokens usan **RS256** (par asimétrico), rotación de claves, `kid` en header
+  y descubrimiento OIDC.
