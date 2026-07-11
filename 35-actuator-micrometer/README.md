@@ -1,156 +1,115 @@
-## 35 — Observabilidad Avanzada (Micrometer Tracing y OpenTelemetry)
+# 35 — Actuator + Micrometer (Prometheus)
 
-### Propósito
-Aprender a rastrear el ciclo de vida completo de una petición a través de múltiples microservicios (Distributed Tracing) utilizando Micrometer Tracing (el sucesor de Spring Cloud Sleuth) y exportar estos datos a sistemas como Zipkin o Jaeger utilizando el estándar OpenTelemetry (OTLP).
+## Propósito
+Aprender a instrumentar una aplicación Spring Boot con **Actuator** (endpoints de salud/metrics) y **Micrometer** (fachada de métricas), exportando en formato **Prometheus** listo para scrapear.
 
-### Problema que resuelve
-En un monolito, si algo falla, miras los logs y todo está ahí. En Arquitectura de Microservicios, un usuario hace clic en "Comprar". Esa petición entra al *Gateway*, viaja al *Servicio de Ventas*, este llama al *Servicio de Inventario*, y finalmente al *Servicio de Pagos*.
-- Si la compra falla o tarda 5 segundos, ¿en cuál de los 4 servicios ocurrió el problema?
-- Buscar manualmente un error en 4 archivos de logs de 4 servidores diferentes es imposible (Agujero negro de observabilidad).
+## Problema que resuelve
+Sin observabilidad, una app en producción es una **caja negra**: si algo va lento o se cae, no sabes por qué. Los operadores necesitan métricas continuas (RPS, latencia, errores, contadores de negocio) y health checks estandarizados que un balanceador o un orquestador (Kubernetes) pueda consumir.
 
-### Cómo lo resuelve
-**Distributed Tracing (Trazabilidad Distribuida)** inyecta un ID único (Trace ID) en el momento exacto en que la petición entra al Gateway. Cada vez que un servicio llama a otro por HTTP, adjunta ese mismo `Trace ID` en los Headers de la petición.
-Todas las líneas de log en todos los microservicios llevarán el mismo Trace ID. Si buscas ese ID en Kibana o Zipkin, verás la historia completa: *"Ventas tomó 10ms, Inventario tomó 5ms, Pagos tardó 4985ms y lanzó excepción"*.
+## Cómo lo resuelve
+- **Actuator** agrega endpoints HTTP estandarizados: `/actuator/health`, `/actuator/metrics`, `/actuator/prometheus`, `/actuator/info`.
+- **Micrometer** es la fachada (SLF4J-para-métricas): tú programas contra `MeterRegistry`, `Counter`, `Timer`, `Gauge`, y él exporta al backend que quieras (Prometheus, Datadog, New Relic, JMX, etc.) solo cambiando la dependencia runtime.
 
-### Por qué aprenderlo
-A partir de Spring Boot 3, el antiguo `Spring Cloud Sleuth` fue eliminado y reemplazado por la abstracción nativa `Micrometer Tracing`. Saber configurar el Distributed Tracing es un requisito absoluto para trabajar en cualquier arquitectura Cloud-Native empresarial.
+## Por qué aprenderlo
+Prometheus + Grafana es el estándar de facto en la industria (Kubernetes, CNCF). Todo microservicio Spring Boot moderno expone `/actuator/prometheus` para ser scrapeado por Prometheus y visualizado en Grafana.
 
 ```mermaid
-graph TD
-    A["Usuario (Clic Comprar)"] -->|"TraceID: 12345 (Generado)"| B["Servicio Ventas"]
-    
-    B -->|"HTTP Header (TraceID: 12345)"| C["Servicio Inventario"]
-    B -->|"HTTP Header (TraceID: 12345)"| D["Servicio Pagos"]
-    
-    B -.->|"Envía datos asíncronos"| Z["Zipkin Server"]
-    C -.->|"Envía datos asíncronos"| Z
-    D -.->|"Envía datos asíncronos"| Z
-    
-    Z --> E["Dashboard Visual<br/>(Muestra el árbol de llamadas)"]
+flowchart LR
+    A["OrderController<br/>POST /api/orders"]:::app --> B["OrderService"]:::app
+    B --> C["Counter<br/>app.orders.created"]:::meter
+    C --> D["MeterRegistry<br/>(Prometheus)"]:::meter
+    D --> E["/actuator/prometheus"]:::http
+    E --> F["Prometheus scraper"]:::infra
+    F --> G["Grafana Dashboard"]:::infra
 
-    style Z fill:#339af0,color:#fff
+    classDef app fill:#e3f2fd,stroke:#1976d2
+    classDef meter fill:#fff3e0,stroke:#f57c00
+    classDef http fill:#e8f5e9,stroke:#388e3c
+    classDef infra fill:#f3e5f5,stroke:#7b1fa2
 ```
 
----
+## Glosario Básico
+| Término | Explicación |
+|---|---|
+| **Actuator** | Módulo de Spring Boot que expone endpoints operacionales (health, metrics, env, threaddump). |
+| **Micrometer** | Fachada de métricas. Escribes una vez, exportas a cualquier backend. |
+| **MeterRegistry** | Registro central donde viven todas las métricas de la app. Boot autoconfigura uno según el backend detectado. |
+| **Counter** | Métrica que solo sube (o se resetea). Ideal para contar eventos. |
+| **Gauge** | Métrica de valor instantáneo (memoria libre, tamaño de cola). |
+| **Timer** | Métrica que mide duración + cuenta. |
+| **Prometheus** | Base de datos de series temporales que scrapea endpoints HTTP en formato texto. |
+| **Scrape** | Prometheus hace GET periódico al endpoint `/actuator/prometheus`. |
 
-### Glosario Básico
+## Conceptos
 
-#### `Trace ID` (ID de Traza)
-Un identificador único global para el flujo completo de una solicitud, desde que entra al sistema hasta que sale. Se comparte entre todos los microservicios.
+### 1. Actuator endpoints
+Se activan agregando `spring-boot-starter-actuator`. Por defecto solo `/actuator/health` se expone por HTTP; los demás hay que habilitarlos con `management.endpoints.web.exposure.include`. Este módulo expone `health, info, metrics, prometheus`.
 
-#### `Span ID` (ID de Tramo)
-Un identificador para una operación específica *dentro* de un Trace. Si Ventas llama a Pagos, el viaje completo tiene 1 Trace ID, pero el trabajo local de Ventas es un Span, y el trabajo local de Pagos es otro Span hijo.
+### 2. Micrometer + Prometheus registry
+Agregar `io.micrometer:micrometer-registry-prometheus` en runtime hace que Boot autoconfigure un `PrometheusMeterRegistry` como el `MeterRegistry` principal. Automáticamente aparece el endpoint `/actuator/prometheus` con las métricas en formato texto (`# HELP ... # TYPE ...`).
 
-#### `MDC` (Mapped Diagnostic Context)
-Una estructura de datos manejada por tu librería de Logs (Logback). Micrometer inyecta automáticamente el TraceID y SpanID en el MDC, lo que permite que cada `log.info()` imprima mágicamente esos IDs sin que tú modifiques el texto del log.
+### 3. Contador custom de negocio
+`MetricsConfig` declara un `@Bean Counter ordersCounter(MeterRegistry registry)` con nombre `app.orders.created`. `OrderService` lo inyecta y llama `.increment()` cada vez que crea un pedido. Al exportar, Micrometer transforma el nombre a `app_orders_created_total` (convención Prometheus: puntos → guiones bajos, sufijo `_total` en counters).
 
-#### `OpenTelemetry (OTel)`
-El estándar open-source de la industria para generar y exportar telemetría (Métricas, Logs y Trazas). Zipkin, Jaeger, Datadog y NewRelic entienden el formato OTel.
+### 4. Tags globales
+`management.metrics.tags.application: actuator-demo` agrega la etiqueta `application="actuator-demo"` a **todas** las métricas. Fundamental cuando varias apps envían al mismo Prometheus.
 
----
+## Antes vs Ahora
 
-### Conceptos
+| Aspecto | ANTES (Java 8 / JMX manual) | AHORA (Java 21 / Micrometer + Actuator) |
+|---|---|---|
+| Métrica custom | Crear `MBean` + interfaz `MXBean` + registrar en `MBeanServer` | `registry.counter("app.orders.created").increment()` |
+| Export a Prometheus | Ejecutar `jmx_exporter` como sidecar java-agent con YAML | Dependencia runtime + endpoint `/actuator/prometheus` |
+| Health check | Servlet propio devolviendo 200/500 según lógica manual | `/actuator/health` con `HealthIndicator` beans |
+| Inyección del contador | Field injection con `@Autowired` | Constructor injection con campo `final` |
+| Sintaxis de respuesta JSON | `new HashMap<String,String>(){{ put("id",id); }}` | `Map.of("id", id, "status", "CREATED")` |
 
-#### 1. Correlación de Logs Básica
-- **Qué es** — El primer paso de la observabilidad. Hacer que cada línea de log en tu consola muestre `[TraceID, SpanID]`.
-- **Código** — Añadir dependencias en `pom.xml`:
-  ```xml
-  <!-- La abstracción de Tracing -->
-  <dependency>
-      <groupId>io.micrometer</groupId>
-      <artifactId>micrometer-tracing-bridge-brave</artifactId>
-  </dependency>
-  ```
-  Al reiniciar tu aplicación y hacer un GET, notarás que los logs cambian de esto:
-  `2024-05-10 [http-nio-8080-exec-1] INFO c.e.OrderService - Iniciando orden...`
-  a esto:
-  `2024-05-10 [http-nio-8080-exec-1] [63af1... , 89f4b...] INFO c.e.OrderService - Iniciando orden...`
-  *(El primer número es el Trace ID, el segundo el Span ID).*
+## FAQ del Alumno
 
-#### 2. Propagación de TraceID en llamadas REST (RestTemplate / RestClient)
-- **Qué es** — Si usas el cliente HTTP correctamente configurado, Micrometer inyectará los headers (ej: `X-B3-TraceId`) automáticamente cuando llames a otro microservicio.
-- **Código** — Inyección de clientes:
-  ```java
-  @Configuration
-  public class RestConfig {
-  
-      // ¡IMPORTANTE! Debes inyectar el RestClient.Builder que Spring proporciona.
-      // Si haces 'RestClient.builder()' desde cero, perderás los interceptores de Tracing.
-      @Bean
-      public RestClient customRestClient(RestClient.Builder builder) {
-          return builder.baseUrl("http://servicio-b").build();
-      }
-  }
-  ```
-  Cuando tu `Servicio A` haga un `restClient.get()`, enviará los headers de tracing mágicamente. El `Servicio B` (si también tiene Micrometer) leerá esos headers y adoptará el mismo Trace ID.
+- **¿Por qué el nombre `app.orders.created` se ve como `app_orders_created_total` en Prometheus?** Micrometer aplica la convención de Prometheus: puntos → guiones bajos y sufijo `_total` para los counters. Así funciona el ecosistema y no debes preocuparte.
+- **¿Puedo exponer todos los endpoints con `*`?** Sí, `include: "*"`, pero es una mala idea en producción: `/actuator/env` filtra propiedades, `/actuator/heapdump` genera GB. Expón solo lo que necesitas.
+- **¿Dónde vive el `MeterRegistry`?** Boot lo autoconfigura al detectar `micrometer-registry-prometheus` en classpath. Es un bean singleton y se inyecta como cualquier otro.
+- **¿Qué pasa si tengo dos apps enviando `app_orders_created_total`?** Sin tags, se mezclan. Por eso agregamos `metrics.tags.application: actuator-demo` para distinguirlas en Prometheus/Grafana.
+- **¿Por qué `TestRestTemplate` no se usa?** Fue eliminado en Spring Boot 4.1.0. Usamos `RestClient` de Spring Framework 7 con `@LocalServerPort`.
+- **¿Necesito Prometheus corriendo para probar esto?** No. El endpoint `/actuator/prometheus` funciona solo; Prometheus solo lo lee periódicamente. Puedes hacer `curl` manualmente para verlo.
+- **¿Y las métricas automáticas?** Boot registra out-of-the-box: JVM (heap, GC, threads), Tomcat (sesiones, requests), HTTP (`http_server_requests_seconds`), sistema (CPU, disco). Gratis.
 
-#### 3. Exportando a Zipkin (Distributed Tracing Visual)
-- **Qué es** — Enviar los Spans (los "tramos" de tiempo) a un servidor Zipkin para visualizarlos en un diagrama de Gantt.
-- **Código**:
-  ```xml
-  <!-- Exportador a Zipkin -->
-  <dependency>
-      <groupId>io.zipkin.reporter2</groupId>
-      <artifactId>zipkin-reporter-brave</artifactId>
-  </dependency>
-  ```
-  ```yaml
-  # application.yml
-  management:
-    tracing:
-      sampling:
-        probability: 1.0 # 1.0 = Exporta el 100% de las trazas a Zipkin. (En PROD usa 0.1 o 0.01)
-    zipkin:
-      tracing:
-        endpoint: "http://localhost:9411/api/v2/spans" # Dónde está instalado Zipkin
-  ```
+## Ejercicios
+1. Agrega un `Timer` que mida el tiempo de `createOrder()` y verifica que aparece `app_orders_duration_seconds` en `/actuator/prometheus`.
+2. Crea un `Gauge` que exponga el número total de pedidos vivos en un `AtomicInteger`.
+3. Configura `management.endpoints.web.base-path: /admin` y observa cómo cambia la URL.
+4. Implementa un `HealthIndicator` custom que devuelva `DOWN` si un archivo `maintenance.flag` existe.
 
-#### 4. Creando Spans Personalizados (`@NewSpan`)
-- **Qué es** — Spring crea Spans automáticamente por cada petición HTTP o método `@Async`. Si tienes un método local muy lento y pesado (procesamiento de imágenes) y quieres que aparezca como un bloque separado en el diagrama visual de Zipkin.
-- **Código**:
-  ```java
-  @Service
-  public class ImageService {
-      
-      // Crea un Span hijo llamado "resize-image"
-      @NewSpan("resize-image")
-      public void resizeImage() {
-          // lógica lenta...
-      }
-  }
-  ```
+## Cómo ejecutar
 
-#### 5. Edge Cases y Errores Comunes
+```powershell
+# PowerShell (Windows)
+.\build.ps1
+java -jar target\actuator-micrometer-1.0.0.jar
+```
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| Se pierde el Trace ID en hilos paralelos | Creas hilos manualmente con `new Thread()` o `CompletableFuture.supplyAsync()` | Micrometer Tracing guarda los IDs en `ThreadLocal`. Al saltar de hilo, se pierden. Debes usar los Wrappers de Spring (`ContextAwareExecutorService`) o la nueva API de Spring 3.2 (`ContextSnapshot`). |
-| Logs asíncronos vacíos | Tienes `@Async` y ves un TraceID distinto | Igual que arriba. Si configuras un ThreadPool personalizado (Módulo 21), debes envolverlo con un `TaskDecorator` que copie el MDC del hilo padre al hilo hijo. |
-| Overhead (La app se pone lenta) | Tienes `sampling.probability: 1.0` en un sistema de 10,000 requests por segundo | Exportar trazas por HTTP consume CPU. En Producción, el sampling debe ser `0.01` (1% de las peticiones). Si tienes un error, ese 1% te bastará para encontrar patrones estadísticos. |
-
----
-
-### Ejercicios
-1. Añade la dependencia `micrometer-tracing-bridge-brave` a un proyecto REST. Lanza una petición y revisa la consola para verificar que se imprime el TraceID y SpanID en el log.
-2. Levanta un servidor de Zipkin en tu máquina local usando Docker:
-   `docker run -d -p 9411:9411 openzipkin/zipkin`
-3. Añade la dependencia del exportador `zipkin-reporter-brave` y configura el `.yml` (`probability: 1.0`).
-4. Haz una llamada a tu API. Abre el navegador en `http://localhost:9411`, dale a "Run Query" y observa el Span (bloque de tiempo) visual de tu método.
-5. (Avanzado) Levanta un "Servicio B" en el puerto 8081. Haz que el "Servicio A" (8080) llame al "Servicio B" usando un `RestClient` bien inyectado. Revisa Zipkin para ver el viaje de la petición saltando de un servicio a otro en el mismo gráfico.
-
-### Cómo ejecutar
 ```bash
-cd 35-actuator-micrometer
-mvn spring-boot:run
-
-# Levantar Zipkin para ver los gráficos
-docker-compose up -d
+# Git Bash / Linux
+./build.sh
+java -jar target/actuator-micrometer-1.0.0.jar
 ```
 
-### Archivos del Proyecto
+Luego:
+```bash
+curl http://localhost:8080/actuator/health
+curl -X POST http://localhost:8080/api/orders
+curl http://localhost:8080/actuator/prometheus | grep app_orders
+```
+
+## Archivos del Proyecto
 | Archivo | Propósito |
-|---------|-----------|
-| `pom.xml` | `micrometer-tracing-bridge-brave` y `zipkin-reporter`. |
-| `docker-compose.yml` | Servidor openzipkin. |
-| `config/RestConfig.java` | Inyección de `RestClient.Builder` para propagación de Headers OTel. |
-| `controller/ObservabilityController.java` | Endpoints para generar trazas, demostrando correlación MDC. |
+|---|---|
+| `pom.xml` | Dependencias: web, actuator, micrometer-registry-prometheus (runtime), test. |
+| `application.yml` | Habilita endpoints, health details y tag global `application`. |
+| `ActuatorMicrometerApplication.java` | Clase principal con `main()`. |
+| `config/MetricsConfig.java` | Declara el `@Bean Counter ordersCounter`. |
+| `service/OrderService.java` | Lógica de negocio que incrementa el contador. |
+| `controller/OrderController.java` | Endpoint REST `POST /api/orders`. |
+| `ActuatorMicrometerApplicationTests.java` | `contextLoads`. |
+| `ActuatorEndpointsIT.java` | Tests HTTP con `RestClient`: health, prometheus, POST + verificación de counter=1.0. |
+| `build.ps1` / `build.sh` | Scripts con toolchain portable (JDK 21 + Maven 3.9.16). |

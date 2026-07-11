@@ -1,0 +1,22 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: actuator-micrometer
+
+# Actuator + Micrometer
+# - Exponemos health, info, metrics y prometheus por HTTP.
+# - show-details=always muestra el detalle del health check.
+# - metrics.tags.application agrega una etiqueta comun a TODAS las metricas.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: actuator-demo
