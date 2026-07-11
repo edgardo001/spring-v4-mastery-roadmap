@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Modulo 26 - Docker.
+    Aplicacion Spring Boot minima que contendra un unico endpoint REST
+    (GET /api/hello) y se empaquetara como un fat-JAR ejecutable. Ese
+    JAR es el que la Etapa 2 del Dockerfile copiara a una imagen JRE
+    ligera. Es decir, aqui NO configuramos nada especial de Docker: la
+    "magia" vive en el Dockerfile de la raiz del modulo.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.springroadmap</groupId>
+    <artifactId>docker</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>docker</name>
+    <description>Modulo 26 - Contenerizacion con Docker (multi-stage build)</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- Web: Tomcat embebido + Spring MVC + Jackson. Todo dentro del JAR. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Test: JUnit 5 + Mockito + MockMvc. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!--
+            finalName fija el nombre del artefacto: target/docker-1.0.0.jar
+            Ese nombre exacto es el que el Dockerfile busca en la etapa 2
+            con COPY from=builder /app/target/docker-1.0.0.jar app.jar
+        -->
+        <finalName>docker-1.0.0</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

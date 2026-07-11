@@ -1,0 +1,16 @@
+# Configuracion minima. En Docker es MUY comun sobreescribir estos
+# valores mediante variables de entorno del contenedor (por ejemplo
+# SERVER_PORT=9090 dentro del docker-compose). Spring Boot mapea
+# automaticamente env vars -> propiedades (SERVER_PORT -> server.port).
+server:
+  port: 8080
+
+spring:
+  application:
+    name: docker
+
+# Log corto para que la salida del contenedor sea legible con
+# "docker logs -f <container>".
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level %logger{20} - %msg%n"

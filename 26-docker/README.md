@@ -169,6 +169,34 @@ docker logs -f mi-backend
 
 ---
 
+### Antes vs Ahora (WAR + Tomcat externo → fat JAR + Docker)
+
+| Aspecto | ANTES (Java 8 / Spring 4 clásico) | AHORA (Java 21 / Spring Boot 4 + Docker) |
+|---------|-----------------------------------|------------------------------------------|
+| Empaquetado | `.war` (necesita servidor externo) | `.jar` ejecutable (Tomcat embebido) |
+| Servidor de aplicaciones | Tomcat/WildFly INSTALADO en el servidor | Tomcat viaja DENTRO del JAR |
+| Configuración web | `web.xml` con `<servlet-mapping>` manual | Anotaciones (`@RestController`, `@GetMapping`) |
+| Despliegue | `scp app.war user@server:/opt/tomcat/webapps/` + `systemctl restart tomcat` | `docker build` + `docker run` (identico en cualquier host) |
+| "En mi máquina funciona" | Habitual: Java 8 local vs Java 11 en producción | Imposible: la imagen encapsula el SO + JRE + JAR |
+| Iniciar la app | Reiniciar el Tomcat compartido (afecta a otras apps) | `docker run -p 8080:8080 docker-demo` (aislado) |
+| Actualizar Java | Cambiar el JDK del servidor (riesgoso, compartido) | Cambiar `FROM eclipse-temurin:21-jre-alpine` en el Dockerfile |
+| Escalar horizontalmente | Instalar Tomcat en N máquinas, replicar configuración | `docker run` N veces detrás de un load balancer |
+| Rollback | Restaurar `.war` anterior manualmente | `docker run imagen:vAnterior` (versionado por tag) |
+| Sintaxis del código | Servlets extendiendo `HttpServlet` | Métodos anotados con `@GetMapping` |
+
+### FAQ del Alumno
+
+- **¿Qué es una "imagen" en Docker?** Es una plantilla congelada e inmutable que contiene un sistema operativo mínimo + Java + tu `.jar`. Piensa en ella como una "foto" comprimida de un disco duro listo para arrancar.
+- **¿Qué diferencia hay entre imagen y contenedor?** La imagen es la receta; el contenedor es el plato ya cocinado y corriendo. De una misma imagen puedes lanzar 10 contenedores.
+- **¿Por qué el `Dockerfile` tiene DOS `FROM`?** Es un "multi-stage build". La primera etapa (`FROM ...jdk...`) tiene todo lo pesado (JDK + Maven) para compilar. La segunda etapa (`FROM ...jre...`) es liviana y solo copia el `.jar` ya construido. La imagen final es la de la segunda etapa: más pequeña y segura.
+- **¿Qué hace `WORKDIR /app`?** Es el equivalente a `cd /app` dentro del contenedor: fija la carpeta activa para las instrucciones siguientes.
+- **¿Qué es `EXPOSE 8080`?** Documenta que el contenedor USA el puerto 8080, pero NO lo publica al host. La publicación se hace con `-p 8080:8080` al ejecutar `docker run`.
+- **¿Por qué crear un usuario `spring` en vez de correr como root?** Buena práctica de seguridad: si un atacante logra ejecutar código dentro del contenedor, tendrá menos permisos.
+- **¿Por qué se saltan los tests (`-DskipTests`) dentro del Dockerfile?** Porque los tests ya se ejecutaron en el pipeline de CI (módulo 27) ANTES de construir la imagen. Reejecutarlos aquí duplicaría trabajo.
+- **¿Qué es `.dockerignore`?** Es el equivalente a `.gitignore` para Docker: le dice qué NO copiar al "build context". Evita meter `target/`, `.git/` o `.idea/` a la imagen.
+- **¿Puedo modificar el JAR después de meterlo al contenedor?** No. Los contenedores son inmutables. Si cambias código, reconstruyes la imagen con un nuevo tag y despliegas de nuevo.
+- **¿Necesito Docker para que este módulo compile?** No. `mvn clean verify` genera el JAR y pasa los tests sin Docker. Docker solo se necesita para construir la imagen (`docker build`) y ejecutarla (`docker run`).
+
 ### Ejercicios
 1. En tu proyecto, crea un archivo llamado exactamente `Dockerfile` en la raíz (junto al `pom.xml`) y pega el código del Multi-Stage build.
 2. Ejecuta `docker build -t app-test:1.0 .` y verifica en `docker images` que se haya creado.
@@ -177,22 +205,51 @@ docker logs -f mi-backend
 5. Apaga todo (`docker-compose down`) y levanta todo junto con `docker-compose up -d`. Haz una petición a `localhost:8080` y valida que tu app en contenedor se conectó al Postgres en contenedor.
 
 ### Cómo ejecutar
+
+#### 1. Compilar el JAR (no requiere Docker)
 ```bash
-cd 26-docker
+# Git Bash
+./build.sh
 
-# Compilar y levantar la infraestructura completa
-docker-compose up -d --build
+# PowerShell
+./build.ps1
 
-# Ver logs de la aplicación Spring
-docker-compose logs -f backend-api
+# Manual (con toolchain portable)
+mvn clean verify
+java -jar target/docker-1.0.0.jar
+```
 
-# Detener y destruir contenedores
-docker-compose down
+Salida esperada: se levanta Tomcat embebido en `http://localhost:8080` y `GET /api/hello` retorna `Hello from Docker container`.
+
+#### 2. Construir y correr la imagen Docker (requiere Docker Desktop corriendo)
+```bash
+# Construye la imagen (el punto final = "usa el Dockerfile de esta carpeta")
+docker build -t docker-demo .
+
+# Corre el contenedor mapeando el puerto
+docker run -p 8080:8080 docker-demo
+
+# En otra terminal, probar el endpoint
+curl http://localhost:8080/api/hello
+# → Hello from Docker container
+```
+
+#### 3. Con docker-compose (opcional)
+```bash
+docker compose up --build
+docker compose down
 ```
 
 ### Archivos del Proyecto
 | Archivo | Propósito |
 |---------|-----------|
-| `Dockerfile` | Script de construcción Multi-Stage para crear la imagen ligera. |
-| `docker-compose.yml` | Orquestación de la App + Base de Datos en la misma red. |
-| `src/main/resources/application.yml` | Sus variables son inyectadas mediante el bloque `environment:` de docker-compose. |
+| `pom.xml` | Coordenadas Maven, dependencia `spring-boot-starter-web`, `finalName=docker-1.0.0`. |
+| `Dockerfile` | Multi-stage build: JDK+Maven (build) → JRE Alpine (runtime). Usuario no-root. |
+| `.dockerignore` | Excluye `target/`, `.git/`, `.idea/`, `*.iml` del contexto de build. |
+| `docker-compose.yml` | Orquestación opcional del servicio `app` en el puerto 8080. |
+| `build.sh` / `build.ps1` | Scripts que compilan el JAR con el toolchain portable. NO ejecutan `docker build`. |
+| `src/main/java/.../DockerApplication.java` | Clase principal con `@SpringBootApplication`. |
+| `src/main/java/.../controller/HelloController.java` | Endpoint `GET /api/hello` → `"Hello from Docker container"`. |
+| `src/main/resources/application.yml` | Configuración mínima (puerto 8080, logging). |
+| `src/test/java/.../DockerApplicationTests.java` | `contextLoads()` — smoke test de arranque. |
+| `src/test/java/.../controller/HelloControllerTest.java` | MockMvc standalone: `GET /api/hello` retorna 200 con "Docker container". |

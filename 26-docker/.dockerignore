@@ -1,0 +1,7 @@
+# Archivos que NO deben copiarse al "build context" de Docker.
+# Reducen el tamano del contexto (mas rapido) y evitan filtrar
+# artefactos locales dentro de la imagen.
+target/
+.git/
+.idea/
+*.iml

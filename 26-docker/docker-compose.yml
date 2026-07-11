@@ -1,0 +1,22 @@
+# docker-compose.yml (opcional)
+# ---------------------------------------------------------
+# Orquesta el servicio "app" definido por el Dockerfile de esta
+# carpeta. En modulos posteriores se le anadiran mas servicios
+# (Postgres, Redis, RabbitMQ...) creando una red interna donde
+# los contenedores se ven entre si por el nombre del servicio.
+#
+# Uso:
+#   docker compose up --build   # construye y arranca
+#   docker compose down         # detiene y limpia
+# ---------------------------------------------------------
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: docker-demo:1.0.0
+    container_name: docker-demo
+    ports:
+      # host:contenedor. Puerto 8080 del host mapeado al 8080
+      # interno del contenedor (donde escucha Tomcat).
+      - "8080:8080"
