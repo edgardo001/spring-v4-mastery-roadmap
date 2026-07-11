@@ -1,192 +1,146 @@
-## 47 — Spring Cloud Gateway
+## 47 — Spring Cloud Gateway (simulado con Spring MVC)
 
 ### Propósito
-Aprender a implementar un API Gateway (Puerta de Enlace) como el punto de entrada único para toda tu arquitectura de microservicios, manejando el enrutamiento dinámico, filtros de seguridad centralizados y control de tráfico (Rate Limiting).
+Implementar el patrón **API Gateway** (punto único de entrada, routing, rate limit) usando Spring MVC puro, porque **Spring Cloud Gateway real todavía no es compatible con Spring Boot 4.1.0** (Spring Cloud sigue anclado a Boot 3.x — ver `MEMORY.md`, módulo 29).
 
 ### Problema que resuelve
-Tienes 10 microservicios (Ventas, Inventario, Usuarios) corriendo en puertos aleatorios y escalando dinámicamente.
-- Tu frontend de React no puede memorizar las URLs de los 10 servicios.
-- No quieres implementar la validación del Token JWT 10 veces en 10 proyectos distintos.
-- Si un cliente abusivo hace 5000 peticiones por segundo al servicio de Ventas, lo tumba. ¿Cómo lo bloqueas antes de que llegue a Ventas?
+Cuando tienes múltiples backends (users, posts, orders...), exponerlos directamente al cliente genera:
+- **Acoplamiento de URLs**: si mueves un backend, todos los clientes rompen.
+- **Sin control centralizado**: cada backend implementa su propio rate limit / auth / logging.
+- **CORS y seguridad duplicados** en cada servicio.
 
 ### Cómo lo resuelve
-**Spring Cloud Gateway** se sitúa frente a todos tus microservicios.
-1. El Frontend siempre llama al Gateway (`http://api.tuempresa.com/ventas`).
-2. El Gateway intercepta la llamada, lee la URL, busca la dirección real de "Ventas" en Eureka (Módulo 41) y redirige (enruta) el tráfico hacia allá.
-3. El Gateway valida el JWT una sola vez. Si es inválido, rechaza la petición. Si es válido, la deja pasar.
-4. Aplica reglas (Rate Limiting) con Redis: "Solo 10 peticiones por segundo por IP".
+Un **gateway** intercepta todas las requests, decide a qué backend enviarlas (routing por prefijo) y aplica cross-cutting concerns (rate limit, logging, auth) UNA sola vez.
+
+En este módulo simulamos ese patrón con:
+- `RouteConfig` (`@ConfigurationProperties`) que mapea `pathPrefix → targetUrl`.
+- `GatewayFilter` (`OncePerRequestFilter`) que hace proxy con `RestClient`.
+- `RateLimitFilter` (`OncePerRequestFilter`) con Token Bucket 10 req/s por IP.
 
 ### Por qué aprenderlo
-El API Gateway es el componente arquitectónico más importante en una red de microservicios. Es el "Guardia de Seguridad" y el "Recepcionista" de tu empresa. Spring Cloud Gateway es extremadamente rápido porque está construido sobre Spring WebFlux (Non-blocking), capaz de manejar decenas de miles de conexiones simultáneas.
+Casi toda arquitectura de microservicios usa un gateway (Cloud Gateway, Kong, Nginx, AWS API Gateway). Entender el patrón te permite:
+- Debuggear problemas de latencia/routing en producción.
+- Implementar rate limit / autenticación en el borde.
+- Migrar sin dolor cuando Cloud Gateway real esté disponible en Boot 4.x.
 
 ```mermaid
-graph TD
-    A["Frontend / Móvil"] -->|Todas las peticiones| B["Spring Cloud Gateway"]
-    
-    subgraph Microservicios Privados (Ocultos a Internet)
-        C["Servicio de Usuarios"]
-        D["Servicio de Ventas"]
-        E["Servicio de Inventario"]
-    end
-    
-    B -->|Enrutamiento: /api/users/**| C
-    B -->|Enrutamiento: /api/sales/**| D
-    B -->|Enrutamiento: /api/inventory/**| E
-    
-    B -.->|Limita Tráfico (Rate Limiting)| F[(Redis Cache)]
-    B -.->|Verifica Direcciones| G["Eureka Registry"]
-
-    style B fill:#f03e3e,color:#fff
+graph LR
+    C[Cliente] -->|GET /api/users| G[Gateway :8080]
+    G -->|RateLimit OK?| G
+    G -->|proxy| B1[Backend Users<br/>jsonplaceholder/users]
+    G -->|proxy /api/posts| B2[Backend Posts<br/>jsonplaceholder/posts]
+    G -.->|429 si excede 10 req/s| C
+    style G fill:#fbb,stroke:#900
+    style B1 fill:#bfb
+    style B2 fill:#bfb
 ```
 
----
-
 ### Glosario Básico
-
-#### `Route` (Ruta)
-La unidad de construcción básica. Consiste en un ID, un URI de destino, y una colección de Predicados y Filtros.
-
-#### `Predicate` (Predicado)
-Una condición `if`. El Gateway evalúa la petición HTTP. Ej: "Si el Path empieza por `/api/ventas`" o "Si la cabecera X-Device es Mobile".
-
-#### `Filter` (Filtro)
-Código que intercepta y modifica el Request ANTES de enviarlo al microservicio, o modifica el Response ANTES de devolvérselo al cliente. Ej: "Añadir un Header", "Quitar un Query Param", "Validar JWT".
-
-#### `WebFlux / Netty`
-Spring Cloud Gateway NO usa Tomcat. Usa Netty y el stack Reactivo de Spring (WebFlux). Esto significa que **nunca** bloquea un hilo esperando respuestas, lo que lo hace perfecto para ser un proxy de alto rendimiento.
-
----
+| Término | Explicación |
+|---|---|
+| **API Gateway** | Servicio que recibe todas las requests y las enruta a backends internos. |
+| **Reverse Proxy** | Servidor que hace requests HTTP en nombre del cliente al backend. |
+| **Token Bucket** | Algoritmo de rate limit: cubo con N tokens que se recarga cada segundo. |
+| **`@ConfigurationProperties`** | Anotación que mapea propiedades YAML a un objeto Java type-safe. |
+| **`OncePerRequestFilter`** | Filtro base de Spring que se ejecuta 1 vez por request HTTP. |
+| **`RestClient`** | Cliente HTTP moderno (Spring 6.1+), sucesor de `RestTemplate`. |
+| **429 Too Many Requests** | Código HTTP estándar para "excediste el rate limit". |
 
 ### Conceptos
 
-#### 1. Configuración Básica de Rutas (application.yml)
-- **Qué es** — Puedes configurar todo el enrutamiento sin escribir una sola línea de código Java.
-- **Código**:
-  ```xml
-  <dependency>
-      <groupId>org.springframework.cloud</groupId>
-      <artifactId>spring-cloud-starter-gateway</artifactId>
-  </dependency>
-  ```
-  ```yaml
-  spring:
-    cloud:
-      gateway:
-        routes:
-          - id: ventas-service
-            uri: http://localhost:8081 # Destino
-            predicates:
-              - Path=/ventas/**        # Condición: Entrar por /ventas
-            filters:
-              - RewritePath=/ventas/(?<segment>.*), /$\{segment} # Le quita el '/ventas' antes de enviarlo
-  ```
+#### 1. Routing por prefijo (`RouteConfig`)
+- **Qué es**: un `Map<String, String>` donde la clave es el path-prefix y el valor es la URL destino.
+- **Por qué importa**: separas la política de routing del código. Cambias `application.yml` sin recompilar.
+- **Analogía**: la libreta de direcciones de la recepción de un edificio.
+- **Caso empresarial**: exponer `/api/*` a los clientes sin revelar los hosts internos de cada microservicio.
 
-#### 2. Integración con Eureka (Load Balancing Automático)
-- **Qué es** — En lugar de hardcodear `localhost:8081`, le decimos al Gateway que busque el servicio en Eureka (Módulo 41).
-- **Código**:
-  ```yaml
-  spring:
-    cloud:
-      gateway:
-        routes:
-          - id: ventas-service
-            uri: lb://servicio-ventas # lb:// significa "Load Balancer" buscando en Eureka
-            predicates:
-              - Path=/api/ventas/**
-  ```
+#### 2. Filtro de proxy (`GatewayFilter`)
+- **Qué es**: un `OncePerRequestFilter` que hace `RestClient.get().uri(target).retrieve()`.
+- **Por qué importa**: centraliza el forwarding. Un solo lugar para loguear, timeouts, retries.
+- **Analogía**: la recepcionista que va al piso 5 en tu lugar.
 
-#### 3. Filtros Globales (Global Filters)
-- **Qué es** — Código Java que se ejecuta para **TODAS** las rutas. Ideal para escribir logs de auditoría global o inyectar un Correlation ID.
-- **Código**:
-  ```java
-  @Component
-  @Slf4j
-  public class LoggingGlobalFilter implements GlobalFilter, Ordered {
-  
-      @Override
-      public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
-          log.info("Petición entrante a la ruta: {}", exchange.getRequest().getURI());
-          
-          // Agrega un Header global a todas las peticiones que van hacia los microservicios
-          ServerHttpRequest request = exchange.getRequest().mutate()
-                  .header("X-Correlation-Id", UUID.randomUUID().toString())
-                  .build();
-                  
-          // Continúa la cadena (Pasa al microservicio) y luego intercepta la respuesta
-          return chain.filter(exchange.mutate().request(request).build())
-              .then(Mono.fromRunnable(() -> {
-                  log.info("Respuesta enviada con status: {}", exchange.getResponse().getStatusCode());
-              }));
-      }
-  
-      @Override
-      public int getOrder() {
-          return -1; // Prioridad alta (Se ejecuta primero)
-      }
-  }
-  ```
+#### 3. Rate limit por IP (`RateLimitFilter`)
+- **Qué es**: Token Bucket con capacidad 10 y refill cada 1000 ms.
+- **Por qué importa**: protege backends de sobrecarga y abusos.
+- **Analogía**: parquímetro que acepta 10 monedas por segundo.
 
-#### 4. Rate Limiting con Redis (Filtro por Ruta)
-- **Qué es** — Evitar ataques DDoS limitando a un usuario a 10 peticiones por segundo. El Gateway usa Redis (usando un script de LUA ultrarrápido) para llevar la cuenta en tiempo real.
-- **Código**:
-  ```yaml
-  spring:
-    cloud:
-      gateway:
-        routes:
-          - id: inventario-service
-            uri: lb://servicio-inventario
-            predicates:
-              - Path=/api/inventario/**
-            filters:
-              - name: RequestRateLimiter
-                args:
-                  redis-rate-limiter.replenishRate: 10  # Tickets por segundo (10 req/s)
-                  redis-rate-limiter.burstCapacity: 20  # Ráfaga máxima permitida
-                  key-resolver: "#{@ipKeyResolver}"     # El Bean que decide CÓMO identificar al usuario
-  ```
-  ```java
-  @Configuration
-  public class RateLimiterConfig {
-      // Limitar por IP del cliente
-      @Bean
-      public KeyResolver ipKeyResolver() {
-          return exchange -> Mono.just(
-              exchange.getRequest().getRemoteAddress().getAddress().getHostAddress()
-          );
-      }
-  }
-  ```
+### Antes vs Ahora (backend expuesto vs API Gateway)
+| Aspecto | ANTES (backends expuestos) | AHORA (API Gateway) |
+|---|---|---|
+| URL del cliente | `http://users-svc:8081/users`, `http://posts-svc:8082/posts` | `http://gateway/api/users`, `/api/posts` |
+| Rate limit | Cada backend lo implementa (o no) | Centralizado en el gateway |
+| Auth | Duplicado por servicio | En el borde, una sola vez |
+| Cambio de host backend | Rompe todos los clientes | Cambio 1 línea en `application.yml` |
+| CORS | Config por servicio | Config única |
 
-#### 5. Edge Cases y Errores Comunes
+### Antes vs Ahora (Java 8 → Java 21)
+| Concepto | ANTES (Java 8) | AHORA (Java 21) |
+|---|---|---|
+| Mapa inmutable | `Collections.unmodifiableMap(new HashMap<>())` | `Map.of("status","UP")` |
+| Cliente HTTP | `RestTemplate` (deprecado) | `RestClient.builder().build()` |
+| Config | `@Value("${gateway.route.users}")` disperso | `@ConfigurationProperties(prefix="gateway")` type-safe |
+| Concurrencia mapa | `synchronized(map){ map.put(...) }` | `ConcurrentHashMap.computeIfAbsent(...)` |
+| DTO respuesta | POJO con getters/setters | `record HealthDto(String status)` |
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| Excepción al mezclar Spring Web MVC con el Gateway | Agregaste `spring-boot-starter-web` (Tomcat) al proyecto del Gateway. | **NUNCA** pongas la dependencia `web` en un Gateway. El Gateway funciona exclusivamente sobre Spring WebFlux (Netty). Si pones Tomcat, la aplicación chocará y no arrancará. |
-| Timeouts en peticiones largas | Un microservicio tarda 45 segundos en generar un reporte PDF, pero el Gateway le corta la conexión al cliente a los 30 segundos. | Ajustar el `timeout` de la conexión en la configuración del Gateway. Puedes configurarlo globalmente o por ruta (`metadata.response-timeout: 60000`). |
-| CORS en Gateway vs Microservicio | Configuraste CORS en el microservicio de Ventas, y también en el Gateway. El navegador lanza un error "Access-Control-Allow-Origin multiple values". | **Regla de oro:** El CORS se configura **ÚNICAMENTE** en el API Gateway. Los microservicios detrás del Gateway deben estar limpios de configuraciones CORS. |
-
----
+### FAQ del Alumno
+- **¿Por qué no usan Spring Cloud Gateway "real"?**
+  Porque Spring Cloud aún está en Spring Boot 3.x (verificado 2026-07). No hay release de Cloud para Boot 4.1.0 al momento de escribir. Este módulo enseña el PATRÓN; cuando Cloud Gateway 5.x salga, la migración será cambiar dependencias.
+- **¿Un gateway es un load balancer?**
+  Parcialmente. Un load balancer solo distribuye tráfico entre réplicas. Un gateway hace eso + routing por path + auth + rate limit + logging.
+- **¿Puedo poner el rate limit en el backend?**
+  Sí, pero cada backend duplicaría la lógica. En el gateway lo haces UNA vez.
+- **¿429 vs 503?** 429 = "excediste tu cuota" (culpa del cliente). 503 = "estoy sobrecargado" (culpa del servidor).
+- **¿Qué pasa si el backend está caído?**
+  El `RestClient` lanza `RestClientException`; nuestro filtro responde 502 Bad Gateway. Un gateway real haría circuit breaker (módulo 30).
+- **¿Por qué `OncePerRequestFilter` y no `Filter`?**
+  Garantiza ejecución única por request. Sin él, un forward interno (`RequestDispatcher`) podría dispararlo dos veces.
 
 ### Ejercicios
-1. Crea un proyecto Spring Boot (Solo incluye `Gateway` y `Eureka Client`). **No incluyas Web**.
-2. Configura el `application.yml` para enrutar el tráfico `/api/mock/**` hacia `https://jsonplaceholder.typicode.com`. 
-3. Implementa el filtro global `LoggingGlobalFilter` que imprima en consola la URI entrante.
-4. Levanta el proyecto. Usa Postman para llamar a `http://localhost:8080/api/mock/users`. 
-5. Verifica en la consola que el filtro interceptó la petición, y observa cómo la respuesta es mágicamente devuelta desde JsonPlaceholder como si fuera de tu servidor.
+1. Agregar soporte para reenviar el método HTTP original (POST/PUT/DELETE, no solo GET).
+2. Reenviar las cabeceras `Authorization` del cliente al backend.
+3. Agregar un contador Prometheus (módulo 35) con `gateway.requests.total{route="/api/users"}`.
+4. Reemplazar el Token Bucket casero por **Bucket4j** o **Resilience4j RateLimiter** (módulo 30).
+5. Configurar rutas por path Y por header (`X-Api-Version: v2`).
 
 ### Cómo ejecutar
 ```bash
-cd 47-spring-cloud-gateway
-mvn spring-boot:run
+# Compilar y empaquetar
+./build.sh          # Git Bash
+./build.ps1         # PowerShell
 
-# Probar la ruta mockeada
-curl http://localhost:8080/api/mock/posts/1
+# Ejecutar el JAR
+java -jar target/spring-cloud-gateway-1.0.0.jar
+
+# Probar
+curl http://localhost:8080/gateway/health
+curl http://localhost:8080/api/users
+curl http://localhost:8080/api/posts
 ```
 
 ### Archivos del Proyecto
 | Archivo | Propósito |
-|---------|-----------|
-| `application.yml` | Configuración de Predicates, Filters y Rutas hacia Eureka. |
-| `config/LoggingGlobalFilter.java` | Filtro global para auditar peticiones y alterar el ServerWebExchange. |
-| `config/RateLimiterConfig.java` | Bean `KeyResolver` para limitar peticiones usando la IP del cliente. |
+|---|---|
+| `pom.xml` | Dependencias (web + test). Boot 4.1.0. |
+| `build.sh` / `build.ps1` | Scripts portables usando JDK + Maven de la raíz. |
+| `application.yml` | Rutas del gateway + config de rate limit. |
+| `GatewayApplication.java` | Main de Spring Boot. |
+| `config/RouteConfig.java` | `@ConfigurationProperties` con las rutas. |
+| `config/WebConfig.java` | Registra `RestClient` y los filtros con orden. |
+| `filter/GatewayFilter.java` | Hace proxy con `RestClient`. |
+| `filter/RateLimitFilter.java` | Token Bucket por IP (10 req/s). |
+| `controller/HealthController.java` | `/gateway/health` (no se proxea). |
+| `GatewayApplicationTests.java` | `contextLoads` + test de `/gateway/health`. |
+| `RateLimitFilterTest.java` | Unit test: 10 pasan, la 11 → 429. |
+
+### Nota importante — Spring Cloud Gateway real
+Cuando **Spring Cloud Gateway 5.x** salga compatible con Boot 4.x, este módulo se refactorizará a la API oficial:
+```java
+@Bean
+public RouteLocator routes(RouteLocatorBuilder b) {
+    return b.routes()
+        .route("users", r -> r.path("/api/users/**")
+            .uri("https://jsonplaceholder.typicode.com"))
+        .build();
+}
+```
+Mientras tanto, el patrón que aprendes aquí es el MISMO que usan todos los gateways del mercado.

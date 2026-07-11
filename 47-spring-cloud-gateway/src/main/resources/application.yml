@@ -1,0 +1,24 @@
+# application.yml - Módulo 47 Spring Cloud Gateway (simulado)
+# Define el mapa de rutas del gateway:
+#   path-prefix -> URL destino (upstream)
+# El GatewayFilter intercepta cada request, busca prefijo coincidente y
+# hace proxy con RestClient.
+
+server:
+  port: 8080
+
+spring:
+  application:
+    name: spring-cloud-gateway
+
+gateway:
+  routes:
+    "/api/users": "https://jsonplaceholder.typicode.com/users"
+    "/api/posts": "https://jsonplaceholder.typicode.com/posts"
+  rate-limit:
+    # Token Bucket: tokens que se recargan por segundo (10 req/s por IP)
+    requests-per-second: 10
+
+logging:
+  level:
+    com.springroadmap.gateway: INFO
