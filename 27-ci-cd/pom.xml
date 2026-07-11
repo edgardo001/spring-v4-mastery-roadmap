@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  Módulo 27 - CI/CD con GitHub Actions
+  ============================================================================
+  Este pom.xml define una app mínima Spring Boot que expone GET /api/ping.
+  El objetivo del módulo NO es la app, sino el workflow `.github/workflows/ci.yml`
+  que compila, testea y publica el artefacto automáticamente en cada push.
+
+  ANTES vs AHORA:
+    - Antes (Jenkins): configurabas un "Job" en la UI de Jenkins con XML feo,
+      instalabas plugins a mano, un servidor Jenkins dedicado que había que
+      mantener (parchar, respaldar, escalar).
+    - Ahora (GitHub Actions): un archivo YAML dentro del repo. Cero servidores
+      que administrar. GitHub te presta el runner gratis (2000 min/mes en free).
+  ============================================================================
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.springroadmap</groupId>
+    <artifactId>ci-cd</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>ci-cd</name>
+    <description>Módulo 27 - CI/CD con GitHub Actions</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- Web: expone el endpoint /api/ping -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Test: JUnit 5 + MockMvc para validar el ping en CI -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!-- finalName fijo: el workflow sube exactamente este archivo como artefacto -->
+        <finalName>ci-cd-1.0.0</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

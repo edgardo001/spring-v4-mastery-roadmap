@@ -1,0 +1,61 @@
+# =============================================================================
+#  Workflow de Integración Continua - Módulo 27
+# =============================================================================
+#  Cada push o pull request que toque archivos dentro de 27-ci-cd/
+#  ejecutará este workflow en un runner Ubuntu de GitHub.
+#  Resultado: un JAR listo para descargar como artefacto en la pestaña Actions.
+# =============================================================================
+
+# Nombre visible del workflow en la UI de GitHub (pestaña "Actions").
+name: CI Module 27
+
+# 'on' declara los EVENTOS que disparan el workflow.
+on:
+  # Push a cualquier rama, pero solo si modifica archivos del módulo 27.
+  push:
+    paths: ['27-ci-cd/**']
+  # PR que toque archivos del módulo 27 (así vemos el check verde/rojo en el PR).
+  pull_request:
+    paths: ['27-ci-cd/**']
+
+# 'jobs' agrupa las tareas. Cada job corre en su propio runner virtual.
+jobs:
+  build:
+    # Sistema operativo del runner. Ubuntu es el más rápido y económico.
+    runs-on: ubuntu-latest
+
+    # 'defaults' evita repetir 'working-directory' en cada 'run'.
+    # Todos los comandos shell se ejecutarán DENTRO de 27-ci-cd/.
+    defaults:
+      run:
+        working-directory: 27-ci-cd
+
+    # Lista ordenada de pasos que ejecuta el job.
+    steps:
+      # Paso 1: clona el repositorio en el runner.
+      # Sin este paso, el runner está vacío y no ve nuestro código.
+      - uses: actions/checkout@v4
+
+      # Paso 2: instala Java 21 (Temurin) y activa la caché de Maven.
+      # 'cache: maven' guarda ~/.m2 entre ejecuciones -> builds más rápidos.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      # Paso 3: compila, corre tests y empaqueta.
+      # -B = batch mode (sin barras de progreso, ideal para logs de CI).
+      # verify incluye: compile + test + package + integration-test.
+      - name: Build with Maven
+        run: mvn -B clean verify
+
+      # Paso 4: sube el JAR resultante como artefacto descargable.
+      # Queda disponible en la UI de GitHub durante 90 días por defecto.
+      # OJO: 'path' se resuelve desde la RAÍZ del repo, no desde working-directory,
+      # por eso lleva el prefijo '27-ci-cd/'.
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-cd-jar
+          path: 27-ci-cd/target/ci-cd-1.0.0.jar
