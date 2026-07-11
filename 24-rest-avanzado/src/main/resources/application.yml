@@ -1,0 +1,22 @@
+server:
+  port: 8080
+  # Hardening: no revelar detalles internos al cliente.
+  error:
+    include-stacktrace: never
+    include-message: never
+
+spring:
+  application:
+    name: rest-avanzado
+
+  # Paginación: default y máximos para evitar que un cliente pida size=1000000.
+  data:
+    web:
+      pageable:
+        default-page-size: 10
+        max-page-size: 100
+        one-indexed-parameters: false
+
+logging:
+  level:
+    org.springframework.web: INFO

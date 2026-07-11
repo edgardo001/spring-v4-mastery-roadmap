@@ -227,10 +227,100 @@ curl "http://localhost:8080/api/v1/orders?page=0&size=5&sort=id,desc"
 curl "http://localhost:8080/api/v1/orders/search?status=PENDIENTE&minAmount=100.0&page=0&size=10"
 ```
 
-### Archivos del Proyecto
+### Archivos del Proyecto (esta implementación)
 | Archivo | Propósito |
 |---------|-----------|
-| `repository/OrderRepository.java` | Hereda `JpaRepository` y `JpaSpecificationExecutor`. |
-| `repository/OrderSpecification.java` | Lógica de queries dinámicos con `CriteriaBuilder`. |
-| `controller/OrderController.java` | Recepción de `Pageable` e inyección de Links HATEOAS. |
-| `dto/OrderDto.java` | Record de transporte de datos. |
+| `domain/Product.java` | Record inmutable (id, name, price, version). `version` alimenta el ETag. |
+| `repository/ProductRepository.java` | Repositorio in-memory con `ConcurrentHashMap` y 20 productos precargados. Devuelve `Page<Product>`. |
+| `controller/ProductController.java` | Paginación (`Pageable`) + ETag/If-None-Match + versionado por header (`X-API-Version`). |
+| `application.yml` | Hardening + defaults de paginación (`default-page-size`, `max-page-size`). |
+
+---
+
+## Antes vs Ahora
+
+### Paginación
+
+**ANTES (Servlet / JDBC crudo):**
+```java
+int page = Integer.parseInt(req.getParameter("page"));
+int size = Integer.parseInt(req.getParameter("size"));
+int offset = page * size;
+PreparedStatement ps = conn.prepareStatement(
+    "SELECT * FROM products ORDER BY id LIMIT ? OFFSET ?");
+ps.setInt(1, size);
+ps.setInt(2, offset);
+// ... y aparte otro SELECT COUNT(*) para saber totalPages. Y armar el JSON a mano.
+```
+
+**AHORA (Spring Boot 4.1):**
+```java
+@GetMapping
+public Page<Product> list(Pageable pageable) {
+    return repository.findAll(pageable);
+}
+```
+Spring resuelve `?page=0&size=5` con `PageableHandlerMethodArgumentResolver` y Jackson serializa el `Page<T>` con `content` + `totalPages` + `totalElements` automáticamente.
+
+### Cache HTTP
+
+**ANTES:** todo request devuelve 200 con el JSON completo — el móvil paga datos aunque el recurso no haya cambiado.
+
+**AHORA:** el servidor manda `ETag: "v1"`. En el siguiente request el cliente añade `If-None-Match: "v1"`. Si el `version` no cambió, respondemos 304 Not Modified **sin cuerpo** — el cliente reutiliza su copia local.
+
+### Versionado
+
+**ANTES:** duplicar controllers (`/api/v1/products`, `/api/v2/products`). Pesado y ensucia el árbol de URLs.
+
+**AHORA (header-based):** mismo endpoint, el cliente pide con `X-API-Version: 2` y recibe una forma distinta del cuerpo (`{ "data": {...} }`). Un único controller decide.
+
+---
+
+## FAQ Alumno
+
+**P: ¿Por qué el test registra `PageableHandlerMethodArgumentResolver` a mano?**
+En `MockMvcBuilders.standaloneSetup(...)` NO se cargan los argument resolvers del contexto Spring. Si el controller pide un `Pageable` y no lo registras, MockMvc lanza `IllegalStateException: No primary or single unique constructor found`. Con `.setCustomArgumentResolvers(new PageableHandlerMethodArgumentResolver())` queda resuelto.
+
+**P: ¿Por qué el ETag lleva comillas dobles?**
+Es la sintaxis oficial del RFC 7232. Un ETag válido es `"v1"` (con comillas), no `v1`. `ResponseEntity.eTag("...")` te obliga a pasarlas — si te olvidas, lanza `IllegalArgumentException`.
+
+**P: ¿Por qué el repositorio no es una interface como en JPA?**
+Este módulo enfoca REST puro, sin BD. Un `ConcurrentHashMap` alcanza para enseñar paginación con `Page/Pageable`. El patrón de la interface + `JpaRepository` lo viste en 07 y 18.
+
+**P: ¿`Page<Product>` no da warning al serializar en Boot 4?**
+Sí, si construyes `new PageImpl<>(list)` sin pasar Pageable y total, Spring loguea un warning y en Boot 4 puede fallar la serialización. Por eso siempre usamos `new PageImpl<>(content, pageable, totalElements)`.
+
+**P: ¿Por qué versionar por header y no por URI?**
+Es equivalente en robustez. Header-based mantiene los URIs limpios (`/api/products/1` es SIEMPRE ese recurso) — más purismo REST. URI versioning (`/v1/`, `/v2/`) es más cómodo para CDNs y Swagger. Ambos válidos; este módulo enseña el header porque es menos común en tutoriales.
+
+**P: ¿Qué gana el cliente con un 304?**
+Ahorra ancho de banda: el body no viaja. Con recursos grandes (imágenes, JSON de 500KB) es la diferencia entre pagar datos móviles o no. El navegador aplica esto solito con la caché HTTP.
+
+**P: ¿Por qué `max-page-size: 100` en el yml?**
+Defensa contra DoS: sin el máximo, un cliente puede pedir `?size=1000000` y forzar al servidor a materializar toda la tabla en RAM. `default-page-size` protege cuando el cliente olvida el parámetro.
+
+---
+
+## Cómo ejecutar
+
+```bash
+# Build (Windows)
+./build.ps1
+# Build (Linux/macOS/Git Bash)
+./build.sh
+
+java -jar target/rest-avanzado-1.0.0.jar
+
+# Paginación
+curl "http://localhost:8080/api/products?page=0&size=5"
+
+# ETag: primera llamada devuelve 200 + header ETag: "v1"
+curl -i http://localhost:8080/api/products/1
+
+# Segunda llamada con If-None-Match → 304 Not Modified (sin body)
+curl -i -H 'If-None-Match: "v1"' http://localhost:8080/api/products/1
+
+# Versionado por header
+curl -H 'X-API-Version: 2' http://localhost:8080/api/products/1
+# → {"data":{"id":1,"name":"Product-1","price":10.00,"version":"v1"}}
+```
