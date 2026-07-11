@@ -1,0 +1,14 @@
+# Configuracion minima del modulo 14 - JWT.
+# Puerto por defecto; en tests se usa RANDOM_PORT para evitar colisiones.
+server:
+  port: 8080
+
+spring:
+  application:
+    name: jwt
+
+# Logs utiles para depurar el flujo de seguridad. En produccion bajar a INFO/WARN.
+logging:
+  level:
+    org.springframework.security: INFO
+    com.springroadmap.jwt: DEBUG

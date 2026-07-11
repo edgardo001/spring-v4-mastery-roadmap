@@ -1,336 +1,194 @@
-## 14 — JWT (JSON Web Tokens) con Spring Security
+# 14 — JWT (JSON Web Tokens)
 
-### Propósito
-Aprender a implementar autenticación stateless con JWT (JSON Web Tokens) en Spring Security, incluyendo la generación de access tokens y refresh tokens, filtros de autenticación y protección de endpoints REST sin sesiones de servidor.
+## Proposito
+Aprender autenticacion **stateless** en Spring Boot 4 usando JWT firmados con HMAC-SHA256 (libreria `jjwt` 0.12+). El servidor emite un token al hacer login y valida ese token en cada request protegido, sin usar sesiones ni cookies.
 
-### Problema que resuelve
-La autenticación basada en sesiones (módulo 13) tiene limitaciones críticas para APIs modernas:
-- **No es escalable horizontalmente**: Si tienes 3 instancias detrás de un load balancer, la sesión solo existe en una instancia.
-- **No funciona para móviles y SPAs**: Las aplicaciones React/Angular y las apps móviles no manejan cookies de sesión.
-- **Estado en el servidor**: El servidor debe almacenar en memoria la sesión de cada usuario activo, consumiendo recursos.
+## Problema que resuelve
+En el modulo 13 (`13-seguridad-basica`) usamos sesiones HTTP: el servidor guardaba estado del usuario en memoria y el cliente arrastraba una cookie `JSESSIONID`. Ese modelo **no escala** en arquitecturas modernas:
+- Con multiples instancias detras de un balanceador, cada nodo tendria su propia sesion (necesitas sticky sessions o un store compartido tipo Redis).
+- Para APIs consumidas por SPAs, apps moviles o microservicios, el manejo de cookies es incomodo y sufre problemas de CORS/CSRF.
+- Las sesiones acoplan al cliente con un servidor especifico.
 
-### Cómo lo resuelve
-JWT es un token auto-contenido (contiene los datos del usuario codificados) que el cliente envía en cada petición dentro del header `Authorization`. El servidor no necesita almacenar sesiones; solo verifica la firma del token.
+## Como lo resuelve
+JWT convierte al **token en la fuente de verdad**:
+1. El cliente hace login con usuario/contrasena.
+2. El servidor emite un JWT firmado que contiene el username y una fecha de expiracion.
+3. El cliente guarda el token (localStorage, cookie httpOnly, memoria).
+4. En cada request envia `Authorization: Bearer <token>`.
+5. Un filtro (`JwtAuthFilter`) valida la firma y coloca al usuario en el `SecurityContext`.
+6. El servidor **no guarda nada** entre requests: el token se autovalida.
 
-### Por qué aprenderlo
-JWT es el estándar de facto para autenticación en APIs REST, microservicios, aplicaciones móviles y SPAs. Empresas como Netflix, Spotify y bancos digitales usan JWT. En entrevistas técnicas, implementar un flujo JWT completo es una prueba frecuente.
+## Por que aprenderlo
+Es el estandar de-facto para autenticacion en APIs REST desde 2015. Lo veras en todas partes: Auth0, Cognito, Keycloak, Firebase Auth, y en el 90% de los microservicios empresariales.
 
 ```mermaid
 sequenceDiagram
-    participant Client as Cliente (React/Angular/Mobile)
-    participant Auth as POST /api/auth/login
-    participant JWT as JwtService
-    participant Filter as JwtAuthFilter
-    participant API as GET /api/users (protegido)
-
-    Client->>Auth: {"username":"admin","password":"123"}
-    Auth->>JWT: generateAccessToken(user)
-    JWT-->>Auth: accessToken (expira en 15min)
-    Auth->>JWT: generateRefreshToken(user)
-    JWT-->>Auth: refreshToken (expira en 7 días)
-    Auth-->>Client: {"accessToken":"eyJ...","refreshToken":"eyJ..."}
-
-    Note over Client: Guarda los tokens (localStorage/HttpOnly cookie)
-
-    Client->>Filter: GET /api/users + Header: Authorization: Bearer eyJ...
-    Filter->>JWT: validateToken(token)
-    JWT-->>Filter: ✅ Token válido, usuario: admin
-    Filter->>Filter: SecurityContextHolder.setAuthentication(admin)
-    Filter->>API: Petición autorizada
-    API-->>Client: 200 OK + lista de usuarios
-
-    Note over Client: Cuando el accessToken expira...
-    Client->>Auth: POST /api/auth/refresh + refreshToken
-    Auth->>JWT: validateRefreshToken + generateNewAccessToken
-    Auth-->>Client: {"accessToken":"eyJ_nuevo..."}
+    autonumber
+    participant C as Cliente
+    participant A as AuthController
+    participant J as JwtService
+    participant F as JwtAuthFilter
+    participant P as PrivateController
+    C->>A: POST /api/auth/login {admin, admin123}
+    A->>J: generateToken("admin")
+    J-->>A: eyJhbGciOi...
+    A-->>C: 200 { token }
+    C->>F: GET /api/me + Authorization: Bearer eyJ...
+    F->>J: validateAndExtractUsername(token)
+    J-->>F: "admin"
+    F->>P: request con SecurityContext lleno
+    P-->>C: 200 "admin"
 ```
 
----
+## Glosario Basico
+| Termino | Significado |
+|---|---|
+| **JWT** | JSON Web Token. Cadena `header.payload.signature` codificada en base64url. |
+| **HMAC-SHA256 (HS256)** | Algoritmo de firma simetrica. Misma clave firma y verifica. |
+| **Claim** | Cada campo del payload: `sub` (subject), `iat` (issued at), `exp` (expiration). |
+| **Bearer token** | Convencion RFC 6750: `Authorization: Bearer <token>`. |
+| **Stateless** | El servidor no guarda estado entre requests. |
+| **`OncePerRequestFilter`** | Filtro Spring que corre exactamente una vez por request. |
+| **`SecurityContextHolder`** | Contenedor `ThreadLocal` con el `Authentication` del usuario actual. |
+| **`SecurityFilterChain`** | Bean de Spring Security 6+ que define las reglas de seguridad. |
 
-### Glosario Básico
+## Conceptos
 
-#### `JWT (JSON Web Token)`
-Un string codificado en Base64 con tres partes separadas por puntos: `header.payload.signature`. El payload contiene los datos del usuario (claims) y la signature asegura que no ha sido modificado.
+### 1. Anatomia de un JWT
+Un JWT tiene tres partes separadas por punto:
 ```
-eyJhbGciOiJIUzI1NiJ9.       <- Header (algoritmo)
-eyJzdWIiOiJhZG1pbiJ9.       <- Payload (claims: username, roles, expiration)
-SflKxwRJSMeKKF2QT4fwpM...   <- Signature (firma con secret key)
+eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsImV4cCI6MTcwMDAwMH0.abc123firma
+   header (base64url)      payload (base64url)              signature
+```
+- **Header**: `{"alg":"HS256"}`.
+- **Payload**: claims (`sub`, `iat`, `exp`, custom).
+- **Signature**: `HMAC-SHA256(base64(header) + "." + base64(payload), secret)`.
+
+Si un atacante modifica el payload, la firma deja de coincidir y el servidor rechaza el token.
+
+### 2. Emision (`JwtService.generateToken`)
+```java
+Jwts.builder()
+    .subject(username)
+    .issuedAt(now)
+    .expiration(expiration)
+    .signWith(key)
+    .compact();
 ```
 
-#### `Access Token`
-Token de corta duración (15 min) que se envía en cada petición. Si expira, el usuario necesita un nuevo token.
+### 3. Validacion (`JwtService.validateAndExtractUsername`)
+```java
+Jwts.parser()
+    .verifyWith(key)
+    .build()
+    .parseSignedClaims(token)
+    .getPayload()
+    .getSubject();
+```
+Si la firma es invalida o el token expiro, jjwt lanza `JwtException` y el filtro deja el `SecurityContext` vacio.
 
-#### `Refresh Token`
-Token de larga duración (7 días) que se usa exclusivamente para obtener un nuevo Access Token sin requerir login completo.
+### 4. Filtro (`JwtAuthFilter extends OncePerRequestFilter`)
+Lee `Authorization`, extrae el token, valida y setea:
+```java
+new UsernamePasswordAuthenticationToken(username, null, Collections.emptyList())
+```
+El tercer parametro (authorities) permitiria manejar roles con `@PreAuthorize` mas adelante.
 
-#### `JwtAuthenticationFilter`
-Un filtro de Spring Security que intercepta cada petición, extrae el JWT del header `Authorization: Bearer xxx`, lo valida y establece la autenticación.
+### 5. Configuracion stateless (`SecurityConfig`)
+- `csrf().disable()` porque los tokens no viajan por cookies del navegador automaticamente.
+- `SessionCreationPolicy.STATELESS` evita crear `HttpSession`.
+- `.addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)`.
 
-#### `SecurityContextHolder`
-El "almacén" donde Spring Security guarda la identidad del usuario autenticado durante el procesamiento de una petición.
+### Casos de uso empresariales
+- APIs consumidas por SPAs (React/Angular/Vue).
+- Autenticacion entre microservicios (propagar identidad).
+- Apps moviles (iOS/Android almacenan el token).
+- Machine-to-machine con client credentials (OAuth2 -> JWT).
 
----
+## Antes vs Ahora
 
-### Conceptos
+### Sesion con cookies (modulo 13) vs JWT stateless (modulo 14)
+| Aspecto | Antes (sesion + cookie) | Ahora (JWT stateless) |
+|---|---|---|
+| Estado en servidor | `HttpSession` en memoria | Nada; el token es la fuente de verdad |
+| Escalado horizontal | Requiere sticky sessions o Redis | Cualquier nodo puede validar |
+| Cliente | Cookie `JSESSIONID` automatica | Header `Authorization: Bearer ...` manual |
+| CSRF | Requiere tokens CSRF | No aplica (no hay envio automatico) |
+| CORS | Complicado con credenciales | Trivial (solo header) |
+| Logout | Invalidar sesion server-side | Cliente descarta token; blacklist opcional |
 
-#### 1. JwtService — Generación y Validación de Tokens
-- **Qué es** — El servicio central que genera, valida y extrae información de los JWT. Usa la librería `jjwt` (Java JWT).
-- **Por qué importa** — Centralizar la lógica JWT en un solo servicio garantiza que todos los tokens se generen con la misma clave secreta y las mismas reglas.
-- **Código** — Servicio JWT completo:
-  ```java
-  @Service
-  @Slf4j
-  public class JwtService {
-  
-      @Value("${jwt.secret}")
-      private String secretKey;
-  
-      @Value("${jwt.access-token.expiration}")
-      private long accessTokenExpiration;  // 15 minutos en milisegundos
-  
-      @Value("${jwt.refresh-token.expiration}")
-      private long refreshTokenExpiration;  // 7 días en milisegundos
-  
-      /**
-       * Genera un Access Token con los datos del usuario.
-       * Los "claims" son los datos que viajan dentro del token.
-       */
-      public String generateAccessToken(UserDetails userDetails) {
-          Map<String, Object> claims = new HashMap<>();
-          claims.put("roles", userDetails.getAuthorities().stream()
-              .map(GrantedAuthority::getAuthority)
-              .toList());
-          
-          return buildToken(claims, userDetails.getUsername(), accessTokenExpiration);
-      }
-  
-      /**
-       * Genera un Refresh Token (sin claims adicionales, solo el username).
-       */
-      public String generateRefreshToken(UserDetails userDetails) {
-          return buildToken(Map.of(), userDetails.getUsername(), refreshTokenExpiration);
-      }
-  
-      private String buildToken(Map<String, Object> claims, String subject, long expiration) {
-          return Jwts.builder()
-              .claims(claims)
-              .subject(subject)
-              .issuedAt(Date.from(Instant.now()))
-              .expiration(Date.from(Instant.now().plusMillis(expiration)))
-              .signWith(getSigningKey())
-              .compact();
-      }
-  
-      /**
-       * Extrae el username del token (el "subject" del JWT).
-       */
-      public String extractUsername(String token) {
-          return extractClaims(token).getSubject();
-      }
-  
-      /**
-       * Valida que el token no esté expirado y pertenezca al usuario correcto.
-       */
-      public boolean isTokenValid(String token, UserDetails userDetails) {
-          String username = extractUsername(token);
-          return username.equals(userDetails.getUsername()) && !isTokenExpired(token);
-      }
-  
-      private boolean isTokenExpired(String token) {
-          return extractClaims(token).getExpiration().before(new Date());
-      }
-  
-      private Claims extractClaims(String token) {
-          return Jwts.parser()
-              .verifyWith(getSigningKey())
-              .build()
-              .parseSignedClaims(token)
-              .getPayload();
-      }
-  
-      private SecretKey getSigningKey() {
-          byte[] keyBytes = Decoders.BASE64.decode(secretKey);
-          return Keys.hmacShaKeyFor(keyBytes);
-      }
-  }
-  ```
-  ```yaml
-  # application.yml
-  jwt:
-    secret: "dGhpcyBpcyBhIHZlcnkgc2VjdXJlIGtleSBmb3IgSldUIHRva2VuIGdlbmVyYXRpb24="
-    access-token:
-      expiration: 900000    # 15 minutos
-    refresh-token:
-      expiration: 604800000  # 7 días
-  ```
-- **Analogía** — El JwtService es como la imprenta de un gobierno que fabrica pasaportes. Tiene el sello oficial (secret key) para crearlos, y también tiene el escáner (validación) para verificar que un pasaporte es auténtico y no ha expirado.
+### Java 8 vs Java 21 en este modulo
+| Tema | Antes (Java 8) | Ahora (Java 21) |
+|---|---|---|
+| DTO | Clase POJO con getters/setters, equals, hashCode | `record LoginRequest(String username, String password) {}` |
+| jjwt API | `Jwts.builder().setSubject(u).signWith(SignatureAlgorithm.HS256, secret)` | `Jwts.builder().subject(u).signWith(key)` (infiere HS256) |
+| Spring Security config | `extends WebSecurityConfigurerAdapter` + `configure(HttpSecurity)` | `@Bean SecurityFilterChain` con lambdas |
+| Coleccion vacia | `Collections.emptyList()` | `List.of()` (equivalente e inmutable) |
 
-#### 2. JwtAuthenticationFilter — Interceptar Cada Petición
-- **Qué es** — Un filtro que se ejecuta antes de cada petición HTTP. Extrae el token del header, lo valida y establece la autenticación en el `SecurityContextHolder`.
-- **Código** — Filtro JWT completo:
-  ```java
-  @Component
-  @Slf4j
-  public class JwtAuthenticationFilter extends OncePerRequestFilter {
-  
-      private final JwtService jwtService;
-      private final UserDetailsService userDetailsService;
-  
-      public JwtAuthenticationFilter(JwtService jwtService, UserDetailsService userDetailsService) {
-          this.jwtService = jwtService;
-          this.userDetailsService = userDetailsService;
-      }
-  
-      @Override
-      protected void doFilterInternal(
-              HttpServletRequest request,
-              HttpServletResponse response,
-              FilterChain filterChain) throws ServletException, IOException {
-  
-          // 1. Extraer el header "Authorization"
-          String authHeader = request.getHeader("Authorization");
-  
-          // Si no hay header o no empieza con "Bearer ", pasar al siguiente filtro
-          if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-              filterChain.doFilter(request, response);
-              return;
-          }
-  
-          // 2. Extraer el token (quitar "Bearer ")
-          String jwt = authHeader.substring(7);
-  
-          try {
-              // 3. Extraer el username del token
-              String username = jwtService.extractUsername(jwt);
-  
-              // 4. Si el usuario no está ya autenticado en este request
-              if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-                  
-                  UserDetails userDetails = userDetailsService.loadUserByUsername(username);
-  
-                  // 5. Validar el token
-                  if (jwtService.isTokenValid(jwt, userDetails)) {
-                      // 6. Crear la autenticación y ponerla en el contexto
-                      var authToken = new UsernamePasswordAuthenticationToken(
-                          userDetails, null, userDetails.getAuthorities()
-                      );
-                      authToken.setDetails(new WebAuthenticationDetailsSource()
-                          .buildDetails(request));
-  
-                      SecurityContextHolder.getContext().setAuthentication(authToken);
-                  }
-              }
-          } catch (ExpiredJwtException e) {
-              log.warn("Token expirado para request: {}", request.getRequestURI());
-          } catch (JwtException e) {
-              log.warn("Token inválido: {}", e.getMessage());
-          }
-  
-          filterChain.doFilter(request, response);
-      }
-  }
-  ```
+## FAQ del Alumno
 
-#### 3. AuthController — Login y Refresh
-- **Qué es** — El controller que maneja el flujo de autenticación: login y refresh de tokens.
-- **Código** — Controller de autenticación:
-  ```java
-  @RestController
-  @RequestMapping("/api/auth")
-  public class AuthController {
-  
-      private final AuthenticationManager authenticationManager;
-      private final JwtService jwtService;
-      private final UserDetailsService userDetailsService;
-  
-      public AuthController(AuthenticationManager authenticationManager,
-                            JwtService jwtService,
-                            UserDetailsService userDetailsService) {
-          this.authenticationManager = authenticationManager;
-          this.jwtService = jwtService;
-          this.userDetailsService = userDetailsService;
-      }
-  
-      @PostMapping("/login")
-      public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
-          // Autenticar credenciales contra la BD
-          authenticationManager.authenticate(
-              new UsernamePasswordAuthenticationToken(request.username(), request.password())
-          );
-  
-          // Cargar detalles del usuario
-          UserDetails userDetails = userDetailsService.loadUserByUsername(request.username());
-  
-          // Generar tokens
-          String accessToken = jwtService.generateAccessToken(userDetails);
-          String refreshToken = jwtService.generateRefreshToken(userDetails);
-  
-          return ResponseEntity.ok(new AuthResponse(accessToken, refreshToken));
-      }
-  
-      @PostMapping("/refresh")
-      public ResponseEntity<AuthResponse> refresh(@RequestBody RefreshRequest request) {
-          String username = jwtService.extractUsername(request.refreshToken());
-          UserDetails userDetails = userDetailsService.loadUserByUsername(username);
-  
-          if (jwtService.isTokenValid(request.refreshToken(), userDetails)) {
-              String newAccessToken = jwtService.generateAccessToken(userDetails);
-              return ResponseEntity.ok(new AuthResponse(newAccessToken, request.refreshToken()));
-          }
-  
-          return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-      }
-  }
-  ```
+- **¿Puedo modificar el payload de un JWT?** Puedes decodificar la parte del payload (es solo base64), pero si la modificas la firma no coincide y el servidor rechaza el token.
+- **¿Donde guardo el token en el cliente?** Trade-off clasico: `localStorage` es vulnerable a XSS; cookie `httpOnly + Secure + SameSite=Strict` es mas robusta pero requiere pensar en CSRF.
+- **¿Que pasa si robo el token de otro usuario?** Puedes hacerte pasar por el hasta que expire. Por eso los tokens deben durar poco (10-15 min en produccion) y usarse siempre sobre HTTPS.
+- **¿Como hago logout si el server no guarda nada?** Opciones: (a) el cliente borra el token, (b) usar tokens muy cortos + refresh tokens, (c) mantener una blacklist server-side (rompe el stateless).
+- **¿Por que HS256 y no RS256?** HS256 usa una sola clave compartida (mas simple). RS256 usa clave publica/privada (mejor para escenarios donde varios servicios verifican pero solo uno emite). El modulo 34-oauth2 profundiza en esto.
+- **¿Por que 401 y no 403 cuando no hay token?** 401 = "no te identificaste"; 403 = "te identificaste pero no tienes permiso". Sin token es 401.
+- **¿El secret HARDCODED es seguro?** NO. Es solo para demo. En produccion se inyecta desde variable de entorno, Vault, AWS Secrets Manager, etc.
+- **¿Que es `Bearer`?** Palabra clave del RFC 6750 que indica "el portador del token es el titular". Analogo a un boleto al portador.
 
-#### 4. Edge Cases y Errores Comunes
+## Ejercicios
+1. Agregar el claim `roles` al token e imprimir los roles en `/api/me`.
+2. Reducir la expiracion a 60 segundos y verificar que despues de esperar, `/api/me` responde 401.
+3. Agregar endpoint `POST /api/auth/refresh` que reciba un token proximo a expirar y devuelva uno nuevo.
+4. Reemplazar las credenciales hardcoded por un `UserDetailsService` en memoria con `BCryptPasswordEncoder`.
+5. Cambiar el algoritmo a RS256 con par de claves generado en el arranque.
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| `SignatureException` | El secret key cambió o el token fue manipulado | Usar la misma key en todos los servidores. Nunca cambiar la key en producción sin invalidar tokens |
-| `ExpiredJwtException` | El access token expiró | El frontend debe usar el refresh token para obtener uno nuevo |
-| Secret key débil | Key menor a 256 bits | Usar al menos 32 bytes (256 bits) codificados en Base64 |
-| Token en localStorage (XSS vulnerable) | JavaScript malicioso puede robar el token | Preferir HttpOnly cookies para refresh tokens. Access token en memoria |
-| No verificar expiración | `isTokenValid` no checa `expiration` | Siempre verificar `!isTokenExpired(token)` |
-| Refresh token sin expiración | El refresh token nunca expira | Siempre configurar expiración (7 días típico) |
-
----
-
-### Ejercicios
-1. Agrega la dependencia `jjwt-api`, `jjwt-impl` y `jjwt-jackson` al `pom.xml`.
-2. Implementa el `JwtService` con métodos para generar, validar y extraer claims de un token.
-3. Crea el `JwtAuthenticationFilter` que intercepte cada petición y valide el token.
-4. Implementa los endpoints `POST /api/auth/login` y `POST /api/auth/refresh`.
-5. Prueba el flujo completo: registrar → login → usar access token → esperar expiración → refresh.
-
-### Cómo ejecutar
+## Como ejecutar
 ```bash
-cd 14-jwt
-mvn spring-boot:run
+# Windows PowerShell
+./build.ps1
+java -jar target/jwt-1.0.0.jar
 
-# 1. Login:
-curl -X POST http://localhost:8080/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}'
+# Git Bash / Linux / Mac
+./build.sh
+java -jar target/jwt-1.0.0.jar
 
-# 2. Usar el access token:
-curl http://localhost:8080/api/users \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9..."
-
-# 3. Refresh:
-curl -X POST http://localhost:8080/api/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refreshToken":"eyJ..."}'
+# Alternativa desarrollo
+../apache-maven-3.9.16/bin/mvn spring-boot:run
 ```
 
-### Archivos del Proyecto
-| Archivo | Propósito |
-|---------|-----------|
-| `pom.xml` | Dependencias: `jjwt-api`, `jjwt-impl`, `jjwt-jackson`. |
-| `config/SecurityConfig.java` | `SecurityFilterChain` con JWT filter y stateless session. |
-| `security/JwtService.java` | Generación, validación y extracción de claims JWT. |
-| `security/JwtAuthenticationFilter.java` | Filtro que intercepta cada petición HTTP. |
-| `controller/AuthController.java` | Endpoints `/login` y `/refresh`. |
-| `dto/LoginRequest.java` | Record con username y password. |
-| `dto/AuthResponse.java` | Record con accessToken y refreshToken. |
-| `dto/RefreshRequest.java` | Record con el refreshToken para renovar. |
+Prueba manual:
+```bash
+# 1) Login
+curl -X POST http://localhost:8080/api/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"username":"admin","password":"admin123"}'
+# -> { "token": "eyJhbGciOi..." }
+
+# 2) Endpoint protegido
+curl http://localhost:8080/api/me \
+     -H "Authorization: Bearer eyJhbGciOi..."
+# -> admin
+
+# 3) Sin token
+curl -i http://localhost:8080/api/me
+# -> HTTP/1.1 401
+```
+
+## Archivos del Proyecto
+| Archivo | Proposito |
+|---|---|
+| `pom.xml` | Dependencias (web, security, jjwt 0.12.6, test) y `finalName=jwt-1.0.0`. |
+| `src/main/java/.../JwtApplication.java` | Clase principal Spring Boot. |
+| `src/main/java/.../service/JwtService.java` | Emision y validacion de JWT (HS256). |
+| `src/main/java/.../security/JwtAuthFilter.java` | Filtro que lee `Authorization` y llena `SecurityContext`. |
+| `src/main/java/.../security/SecurityConfig.java` | `SecurityFilterChain` stateless con las reglas de acceso. |
+| `src/main/java/.../controller/AuthController.java` | `POST /api/auth/login` -> emite token. |
+| `src/main/java/.../controller/PrivateController.java` | `GET /api/me` -> devuelve el principal. |
+| `src/main/java/.../dto/LoginRequest.java` | `record` con username/password. |
+| `src/main/java/.../dto/TokenResponse.java` | `record` con el token emitido. |
+| `src/main/resources/application.yml` | Puerto y logging. |
+| `src/test/.../JwtApplicationTests.java` | `contextLoads`. |
+| `src/test/.../service/JwtServiceTest.java` | Tests unitarios puros del servicio JWT. |
+| `src/test/.../AuthIntegrationTest.java` | Tests de integracion con `TestRestTemplate`. |
+| `build.sh` / `build.ps1` | Scripts que usan el toolchain portable. |
