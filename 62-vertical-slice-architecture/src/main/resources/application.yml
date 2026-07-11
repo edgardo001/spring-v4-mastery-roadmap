@@ -1,0 +1,8 @@
+# Configuracion de la aplicacion Spring Boot del modulo 62.
+# server.port define el puerto HTTP donde se expone la API.
+server:
+  port: 8080
+
+spring:
+  application:
+    name: vertical-slice-architecture
