@@ -1,0 +1,45 @@
+server:
+  port: 8080
+  # Hardening: no revelar detalles internos al cliente.
+  error:
+    include-stacktrace: never
+    include-message: never
+
+spring:
+  application:
+    name: jpa-avanzado
+
+  datasource:
+    url: jdbc:h2:mem:catalogdb;DB_CLOSE_DELAY=-1;MODE=LEGACY
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+      connection-timeout: 5000
+
+  jpa:
+    hibernate:
+      # `create-drop`: Hibernate crea el esquema al arrancar y lo tira al
+      # parar. Solo para desarrollo/demo. En prod: `validate` + Flyway.
+      ddl-auto: create-drop
+    show-sql: true
+    defer-datasource-initialization: true  # data.sql se ejecuta DESPUÉS del schema.
+    properties:
+      hibernate:
+        format_sql: true
+        use_sql_comments: true
+
+  sql:
+    init:
+      mode: always  # Fuerza la ejecución de data.sql también en H2.
+
+  h2:
+    console:
+      enabled: false
+
+logging:
+  level:
+    org.hibernate.SQL: DEBUG
+    org.springframework.web: INFO
