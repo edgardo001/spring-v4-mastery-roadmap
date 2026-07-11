@@ -1,0 +1,14 @@
+# application.yml - modulo 49 gRPC
+# El HTTP server clasico corre en 8080 (para el bridge REST).
+# El servidor gRPC "logico" corre en 9090 (documentado; en este demo simplificado
+# no se levanta un ServerBuilder real porque no hay stubs generados por protoc).
+server:
+  port: 8080
+
+grpc:
+  server:
+    port: 9090
+
+spring:
+  application:
+    name: grpc-demo

@@ -383,40 +383,162 @@ Tiempo máximo total para una llamada gRPC. Se propaga a través de la cadena de
 4. Crea un `@RestController` HTTP que reciba `GET /api/product/{id}` y por dentro use un `@GrpcClient("inventory-service")` (auto-cliente contra sí mismo) para consultar por gRPC.
 5. Agrega un segundo método `ListAllProducts` server-streaming, y consúmelo con `grpcurl` para ver cómo llegan los productos uno por uno.
 
-### Cómo ejecutar
-```bash
-cd 49-grpc
+---
 
-# Compilar (genera clases Java desde el .proto)
-mvn clean compile
+### Por qué este demo es SIMPLIFICADO (decisión de arquitectura)
 
-# Levantar el servidor (Spring Boot en 8080, gRPC en 9090)
-mvn spring-boot:run
+Al implementar este módulo se descubrió que:
 
-# Probar con grpcurl (instalar: https://github.com/fullstorydev/grpcurl)
-# Listar servicios expuestos (requiere reflection habilitado):
-grpcurl -plaintext localhost:9090 list
+1. **`net.devh:grpc-spring-boot-starter` NO es compatible con Spring Boot 4.1.0.** Su autoconfig depende de clases eliminadas o movidas en Boot 4. Igual que pasó con `grpc` en el módulo 30 (Resilience4j) y en el 29 (Spring Cloud Config): el ecosistema Spring Cloud/Spring gRPC todavía va rezagado respecto a Boot 4.
+2. **`protobuf-maven-plugin` requiere el binario `protoc` para el OS del desarrollador** (Windows/Linux/macOS con distintos artefactos `os.detected.classifier`). En el entorno portable de este roadmap esto agrega fricción (descargas por OS, cache Maven específica).
+3. El objetivo pedagógico del módulo es que el alumno **entienda el patrón gRPC** (contrato `.proto`, RPC tipado, stubs, StreamObserver, streaming, interceptores, HTTP/2 binario), NO forzar el codegen en un entorno frágil.
 
-# Llamada Unary:
-grpcurl -plaintext -d '{"product_id":"P-001"}' \
-    localhost:9090 inventory.InventoryService/GetProduct
+**Decisión:** el módulo entrega una implementación **vanilla-simplificada** que:
+- Incluye las dependencias `io.grpc:*` **en el classpath** (para que el alumno pueda importar `io.grpc.Server`, `ServerBuilder`, `StreamObserver`, etc. y experimentar).
+- **Simula** el servicio gRPC con un `@Component` Spring puro (`HelloGrpcServer`) que expone la misma lógica que expondría un `@GrpcService` real.
+- Documenta el `.proto` esperado **abajo en este README** para que el alumno vea la traducción 1-a-1.
+- Expone un **REST bridge** (`/api/hello?name=X`) que muestra el patrón típico de producción (API pública REST → llamada interna gRPC).
 
-# Llamada Server-Streaming:
-grpcurl -plaintext -d '{"product_id":"ALL"}' \
-    localhost:9090 inventory.InventoryService/ListAllProducts
+Cuando el ecosistema Spring gRPC libere una versión compatible con Boot 4, el salto al modo "real" se reduce a: `mvn generate-sources` + reemplazar el `HelloGrpcServer` por una subclase de `HelloServiceGrpc.HelloServiceImplBase`.
 
-# Probar el REST wrapper que internamente llama a gRPC:
-curl http://localhost:8080/api/product/P-001
+### El `.proto` esperado
+
+En un módulo con codegen completo, este archivo viviría en `src/main/proto/hello.proto`:
+
+```proto
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.springroadmap.grpc.proto";
+
+service HelloService {
+  rpc SayHello (HelloRequest) returns (HelloResponse);
+}
+
+message HelloRequest {
+  string name = 1;
+}
+
+message HelloResponse {
+  string message = 1;
+}
 ```
 
+El plugin Maven equivalente (para cuando gRPC-Boot4 exista) sería:
+
+```xml
+<build>
+  <extensions>
+    <extension>
+      <groupId>kr.motd.maven</groupId>
+      <artifactId>os-maven-plugin</artifactId>
+      <version>1.7.1</version>
+    </extension>
+  </extensions>
+  <plugins>
+    <plugin>
+      <groupId>org.xolstice.maven.plugins</groupId>
+      <artifactId>protobuf-maven-plugin</artifactId>
+      <version>0.6.1</version>
+      <configuration>
+        <protocArtifact>com.google.protobuf:protoc:3.25.5:exe:${os.detected.classifier}</protocArtifact>
+        <pluginId>grpc-java</pluginId>
+        <pluginArtifact>io.grpc:protoc-gen-grpc-java:1.68.1:exe:${os.detected.classifier}</pluginArtifact>
+      </configuration>
+      <executions>
+        <execution>
+          <goals>
+            <goal>compile</goal>
+            <goal>compile-custom</goal>
+          </goals>
+        </execution>
+      </executions>
+    </plugin>
+  </plugins>
+</build>
+```
+
+---
+
+### Antes vs Ahora (REST/JSON tradicional → gRPC + Protobuf)
+
+| Aspecto | ANTES (REST/JSON sobre HTTP/1.1) | AHORA (gRPC + Protobuf sobre HTTP/2) |
+|---|---|---|
+| **Formato del payload** | Texto JSON, verboso (`{"productId":"P-001","stock":42}`) | Binario Protobuf (~30-40% del tamaño, 3-10x más rápido de parsear) |
+| **Contrato** | README con ejemplos JSON, informal | `.proto` versionado en Git, validado en compilación |
+| **Tipado** | `String`/`Object` genérico en cliente/servidor | Clases Java tipadas generadas por `protoc`. El compilador atrapa incompatibilidades |
+| **Transporte** | HTTP/1.1, 1 request por conexión (o keep-alive limitado) | HTTP/2 multiplexado: 100+ streams concurrentes por conexión TCP |
+| **Compresión de headers** | Ninguna (headers como texto) | HPACK (compresión de headers de HTTP/2) |
+| **Streaming** | Polling / Server-Sent Events / WebSockets (ad-hoc) | Nativo: server-streaming, client-streaming, bidirectional |
+| **Cliente** | `RestClient`/`RestTemplate` con strings de URL | Stub tipado: `stub.sayHello(request)` como si fuera método local |
+| **Errores** | Códigos HTTP + JSON body (400/404/500) | `Status` enum tipado (`UNAVAILABLE`, `DEADLINE_EXCEEDED`, `NOT_FOUND`, ...) |
+| **Deadlines** | Timeouts por cliente, no se propagan | `Deadline` se propaga automáticamente en cadena de servicios |
+| **Debugging humano** | Fácil: `curl`, DevTools, Postman | Necesitas `grpcurl` o Bloom RPC. El payload binario no es legible directo |
+
+Tabla comparativa de sintaxis Java 8 vs Java 21 usada en el módulo:
+
+| Concepto | Java 8 | Java 21 |
+|---|---|---|
+| DTO respuesta | Clase POJO manual con getter/equals/hashCode | `public record HelloResponse(String message) {}` |
+| Inyección | `@Autowired` en campo `private` | Constructor con parámetros `final` |
+| String vacío | `s == null \|\| s.trim().isEmpty()` | `s == null \|\| s.isBlank()` (Java 11+) |
+| Colecciones inmutables | `Collections.unmodifiableList(new ArrayList<>(...))` | `List.of(...)` |
+| Iteración | `for (X x : list) { ... }` | `list.forEach(x -> ...)` o streams |
+
+---
+
+### FAQ del Alumno
+
+- **¿Qué es un RPC?** — Remote Procedure Call. Llamar a un método que corre en otra máquina como si fuera local. gRPC hace exactamente eso, pero con serialización binaria eficiente sobre HTTP/2.
+- **Si gRPC es más rápido, ¿por qué no lo usamos siempre en lugar de REST?** — Porque los navegadores web y muchas herramientas de debug no hablan gRPC nativo (necesitan gRPC-Web como puente). Regla: **REST para APIs públicas y frontends. gRPC para comunicación interna entre microservicios.**
+- **¿Qué es un `.proto`?** — Un archivo de texto donde declaras mensajes y servicios en el lenguaje Protocol Buffers. Es el **contrato inmutable** entre cliente y servidor. Se versiona en Git como código fuente.
+- **¿Por qué este demo no tiene un `.proto` real?** — Ver sección "Por qué este demo es SIMPLIFICADO" arriba. Resumen: `grpc-spring-boot-starter` no soporta Boot 4.1.0 aún, y `protoc` complica el toolchain portable. Se enseña el patrón sin fricción de codegen.
+- **¿Qué es un stub?** — Un objeto Java que expone métodos del servicio remoto como si fueran locales. Por debajo serializa, envía por red y deserializa la respuesta. Lo genera `protoc` automáticamente.
+- **¿Por qué gRPC usa HTTP/2 y no HTTP/1.1?** — Multiplexación (varios streams en una TCP), compresión de headers (HPACK), server-push, streams bidireccionales. HTTP/1.1 es 1-request-por-conexión (o keep-alive secuencial), demasiado lento para malla de servicios.
+- **¿Puedo consumir un servicio gRPC desde `curl`?** — No directamente (curl no habla HTTP/2 binario Protobuf). Usa `grpcurl` o `evans` (CLIs específicas de gRPC).
+- **¿`StreamObserver` es como una `Promise` de JavaScript?** — Similar en espíritu: es una API asíncrona con 3 callbacks (`onNext`, `onError`, `onCompleted`). La diferencia es que puede emitir MUCHOS valores (no solo uno), soportando streaming.
+- **¿Qué pasa si cambio un campo del `.proto` en producción?** — Depende del cambio: agregar campos nuevos con tag nuevo es seguro. Renombrar/eliminar campos ROMPE la compatibilidad. Regla de oro: **nunca reutilizar field tags, usar `reserved 3;` para deprecarlos.**
+- **¿Por qué el REST bridge?** — Es el patrón real de producción. Los frontends siguen hablando REST/JSON (fácil), pero por dentro los servicios internos se hablan por gRPC. El REST bridge traduce entre ambos mundos.
+
+---
+
+### Cómo ejecutar
+
+```bash
+# Desde la raíz del roadmap, con toolchain portable configurado:
+cd 49-grpc
+
+# Opción 1: script portable (Git Bash / PowerShell)
+./build.sh          # Linux/Mac/Git Bash
+./build.ps1         # PowerShell
+
+# Opción 2: Maven directo
+../apache-maven-3.9.16/bin/mvn clean package
+
+# Ejecutar el artefacto
+../jdk-21.0.11+10/bin/java -jar target/grpc-1.0.0.jar
+
+# Probar el REST bridge (que internamente llama al "servidor gRPC" simulado)
+curl "http://localhost:8080/api/hello?name=Juan"
+# → {"message":"Hola, Juan! (via gRPC-demo)"}
+```
+
+### Artefacto
+
+Genera `target/grpc-1.0.0.jar` ejecutable (Spring Boot fat-jar).
+
 ### Archivos del Proyecto
+
 | Archivo | Propósito |
 |---------|-----------|
-| `pom.xml` | Dependencias gRPC + `protobuf-maven-plugin` para generar stubs Java desde `.proto`. |
-| `src/main/proto/inventory.proto` | Contrato Protocol Buffers: mensajes y servicio `InventoryService`. |
-| `service/InventoryGrpcService.java` | Implementación `@GrpcService` con métodos unary y streaming. |
-| `client/InventoryClient.java` | Cliente `@GrpcClient` que consume el servicio remoto con BlockingStub. |
-| `controller/ProductController.java` | Wrapper REST que expone `/api/product/{id}` y por dentro llama gRPC. |
-| `interceptor/AuthServerInterceptor.java` | Interceptor global que valida el header `authorization` (JWT). |
-| `domain/Product.java` | Entidad de dominio (modelo interno, distinto del `ProductResponse` de protobuf). |
-| `application.yml` | Configura puerto gRPC (`grpc.server.port=9090`) y address del cliente. |
+| `pom.xml` | Dependencias `io.grpc:*` + `protobuf-java` + `javax.annotation-api`. Sin `grpc-spring-boot-starter` (no compatible con Boot 4.1.0). Sin `protobuf-maven-plugin` (demo simplificado). |
+| `build.sh` / `build.ps1` | Scripts portables que exportan `JAVA_HOME` al JDK 21 local y ejecutan Maven portable. |
+| `application.yml` | Configura puerto HTTP (8080) y puerto gRPC lógico (9090). |
+| `GrpcApplication.java` | Clase `@SpringBootApplication` de arranque. |
+| `service/HelloService.java` | Interface del servicio de negocio (equivalente Java del `service HelloService` del `.proto`). |
+| `service/HelloServiceImpl.java` | Implementación `@Service` del servicio (validaciones + construcción del saludo). |
+| `grpc/HelloGrpcServer.java` | `@Component` que **simula** el servidor gRPC. Documenta en comentarios cómo se conectaría con `ServerBuilder.forPort(...).addService(...)` y `StreamObserver`. |
+| `controller/HelloRestBridge.java` | `@RestController` con `GET /api/hello?name=X` que traduce REST → llamada gRPC interna. Usa `record HelloResponse` como DTO. |
+| `test/GrpcApplicationTests.java` | `contextLoads` con `@SpringBootTest`. |
+| `test/service/HelloServiceTest.java` | Unit test puro (sin Spring, sin Mockito) del servicio de negocio. |
+| `test/controller/HelloRestBridgeTest.java` | MockMvc standalone del REST bridge (patrón obligatorio en Boot 4.1.0: no hay `@WebMvcTest`). |
