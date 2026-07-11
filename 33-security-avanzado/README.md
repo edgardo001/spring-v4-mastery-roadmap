@@ -1,161 +1,172 @@
-## 33 — Seguridad Avanzada (RBAC, Method Security, CORS y CSRF)
+## 33 — Security Avanzado (Method Security con @PreAuthorize / @PostAuthorize)
 
 ### Propósito
-Llevar la seguridad de tu aplicación Spring Boot más allá de un simple inicio de sesión. Aprender a proteger métodos específicos (Method Security), implementar control de acceso basado en roles (RBAC) de forma granular, y configurar correctamente las protecciones contra ataques comunes de navegadores como CORS y CSRF.
+Aprender **Method Security**: autorización declarativa en la capa de servicio con `@PreAuthorize` y `@PostAuthorize`, incluyendo *object-level security* (permitir/negar acceso segun datos del objeto retornado).
 
 ### Problema que resuelve
-- **Autorización Insuficiente:** Tienes un endpoint `/api/users/delete`. Si solo verificas que el usuario esté "autenticado", cualquier usuario normal podría borrar a otro usuario. Necesitas validar que tenga el rol de "ADMINISTRADOR".
-- **Ataques de Navegador (CORS/CSRF):** Un atacante crea una página web falsa (ej: `www.tu-banco-falso.com`) que hace peticiones AJAX secretas hacia tu API (`www.tu-banco.com`) aprovechando que el usuario dejó su sesión abierta.
-- **Filtros Globales Inmantenibles:** Poner toda la seguridad en el bloque `HttpSecurity` (ej: `.requestMatchers("/admin/**").hasRole("ADMIN")`) se vuelve inmanejable cuando tu API crece a cientos de endpoints.
+La seguridad por URL (modulo 13) alcanza para reglas gruesas ("/admin/** solo ADMIN"), pero no para reglas finas como "un usuario solo puede leer SUS documentos". Repetir esa logica en cada metodo del servicio ensucia la logica de negocio con `if (auth.getName().equals(...)) throw new AccessDeniedException(...)`.
 
 ### Cómo lo resuelve
-- **Method Security (`@PreAuthorize`)**: Te permite poner la regla de negocio de seguridad directamente encima del método que quieres proteger. Es la forma más legible y mantenible de hacer autorización.
-- **Configuración de CORS**: Le dice al navegador explícitamente "Solo acepto peticiones que vengan del dominio `tu-frontend.com`".
-- **Protección CSRF**: (Cross-Site Request Forgery). Exige un token dinámico en cada petición POST, haciendo imposible que un sitio externo falsifique una petición válida.
+Spring Security ofrece anotaciones declarativas activadas por `@EnableMethodSecurity`:
+- `@PreAuthorize("hasRole('ADMIN')")` — se evalua ANTES del metodo.
+- `@PostAuthorize("returnObject.owner == authentication.name")` — se evalua DESPUES, con acceso al objeto retornado (`returnObject`).
+
+Spring intercepta la llamada via AOP y lanza `AccessDeniedException` si la expresion SpEL es falsa, sin contaminar el metodo con codigo de seguridad.
 
 ### Por qué aprenderlo
-La seguridad perimetral (Autenticación) es solo el paso 1. La seguridad profunda (Autorización en capas) es lo que evita los peores hackeos corporativos (Escalación de privilegios). Dominar CORS te ahorrará horas de dolores de cabeza integrando frontends modernos (React, Angular).
+Toda aplicacion empresarial real necesita reglas por objeto: "un vendedor solo ve sus clientes", "un usuario edita solo su perfil", "un admin puede todo". Method Security es el patron industrial estandar.
 
 ```mermaid
 graph TD
-    A["Hacker en 'sitio-malo.com'"] -->|Script AJAX GET /api/data| B["Tu Servidor Spring"]
-    B --> C{"Filtro CORS"}
-    C -->|"Origen No Permitido"| D["Bloquea la respuesta"]
-    
-    E["Usuario Legítimo"] -->|GET /api/admin/delete| F["Controlador REST"]
-    F --> G["AOP: @PreAuthorize('hasRole(\"ADMIN\")')"]
-    G -->|"No es Admin"| H["HTTP 403 Forbidden"]
-    G -->|"Es Admin"| I["Ejecuta Lógica"]
+    A["Cliente HTTP (Basic Auth)"]:::client --> B["SecurityFilterChain (URL)"]:::filter
+    B --> C["DocumentController"]:::ctrl
+    C --> D["Proxy AOP (@PreAuthorize)"]:::aop
+    D -->|OK| E["DocumentService.deleteById()"]:::svc
+    D -->|FAIL| F["AccessDeniedHandler → 403"]:::deny
+    E --> G["Proxy AOP (@PostAuthorize)"]:::aop
+    G -->|OK| H["Respuesta 200"]:::ok
+    G -->|FAIL| F
 
-    style D fill:#ff6b6b,color:#fff
-    style H fill:#ff6b6b,color:#fff
-    style I fill:#51cf66,color:#fff
+    classDef client fill:#e3f2fd,stroke:#1976d2,color:#0d47a1
+    classDef filter fill:#fff3e0,stroke:#ef6c00,color:#e65100
+    classDef ctrl fill:#f3e5f5,stroke:#7b1fa2,color:#4a148c
+    classDef aop fill:#fffde7,stroke:#fbc02d,color:#f57f17
+    classDef svc fill:#e8f5e9,stroke:#388e3c,color:#1b5e20
+    classDef ok fill:#c8e6c9,stroke:#2e7d32,color:#1b5e20
+    classDef deny fill:#ffcdd2,stroke:#c62828,color:#b71c1c
 ```
 
----
-
 ### Glosario Básico
-
-#### `RBAC` (Role-Based Access Control)
-Control de acceso basado en roles. Asignas roles (`USER`, `ADMIN`) a las personas, y concedes permisos a los roles, no a las personas directamente.
-
-#### `@EnableMethodSecurity`
-Anotación en la clase de configuración de Spring Security que enciende el soporte para anotar métodos individuales con reglas de seguridad. (Reemplaza a la vieja `@EnableGlobalMethodSecurity`).
-
-#### `@PreAuthorize`
-Anotación de Method Security. Evalúa una expresión *antes* de que el método se ejecute. Si es falsa, lanza un `AccessDeniedException` (HTTP 403).
-
-#### `CORS` (Cross-Origin Resource Sharing)
-Un mecanismo de seguridad **del navegador web**. Por defecto, si un script en `dominio-a.com` intenta hacer un fetch a `dominio-b.com`, el navegador lo bloquea a menos que el servidor de `dominio-b.com` responda con un header especial (`Access-Control-Allow-Origin: dominio-a.com`).
-
-#### `CSRF` (Cross-Site Request Forgery)
-Ataque donde el usuario es engañado para ejecutar una acción no deseada en un sitio web en el que está autenticado. Si usas Sesiones (Cookies), debes protegerte. Si usas Tokens JWT en Headers (Arquitectura Stateless), el CSRF es estadísticamente imposible y se puede deshabilitar.
-
----
+- **`@EnableMethodSecurity`** — activa proxies AOP para procesar `@PreAuthorize`/`@PostAuthorize`.
+- **`@PreAuthorize("expr")`** — SpEL evaluado ANTES del metodo. Si `false` → `AccessDeniedException`.
+- **`@PostAuthorize("expr")`** — SpEL evaluado DESPUES. Puede usar `returnObject`.
+- **`hasRole('X')`** — verdadero si el usuario tiene la autoridad `ROLE_X`. Spring agrega `ROLE_` automaticamente.
+- **`authentication.name`** — username del usuario autenticado en el `SecurityContext`.
+- **`returnObject`** — variable especial dentro de `@PostAuthorize` con el valor retornado por el metodo.
+- **Object-level security** — reglas basadas en datos del objeto (no solo en el rol).
+- **`AccessDeniedHandler`** — bean que decide como responder cuando SS lanza `AccessDeniedException`.
+- **`RestClient`** — cliente HTTP fluido de Spring Framework 7, reemplazo de `TestRestTemplate` en Boot 4.1.0.
+- **`@LocalServerPort`** — inyecta el puerto aleatorio del servidor de test (paquete `org.springframework.boot.test.web.server`).
 
 ### Conceptos
 
-#### 1. Method Security y Autorización Granular
-- **Qué es** — En vez de definir todas tus reglas en el `SecurityFilterChain`, las defines método por método usando SpEL (Spring Expression Language).
-- **Código** — Configuración y uso:
+#### 1. `@EnableMethodSecurity`
+- **Qué es** — anotacion que enciende la infraestructura AOP para `@PreAuthorize`/`@PostAuthorize` sobre beans Spring.
+- **Por qué importa** — sin esta anotacion las expresiones se ignoran silenciosamente. Es un error clasico creer que la anotacion sola basta.
+- **Código** — ver `SecurityConfig`. En Spring Security 6/7 reemplaza al viejo `@EnableGlobalMethodSecurity(prePostEnabled=true)`; por defecto ya viene `prePostEnabled=true`.
+- **Analogía** — enciende los guardias que estan dentro de cada oficina. Sin electricidad, los guardias duermen.
+- **Casos de Uso Empresariales** — cualquier back-office con reglas de acceso por accion (aprobar factura, cerrar caja, editar precio).
+
+#### 2. `@PreAuthorize`
+- **Qué es** — verificacion previa: si la expresion SpEL es falsa, el metodo NUNCA se ejecuta y se lanza `AccessDeniedException`.
+- **Por qué importa** — evita contaminar el servicio con `if` de seguridad. Reglas centralizadas y auditables.
+- **Código**:
   ```java
-  @Configuration
-  @EnableWebSecurity
-  @EnableMethodSecurity // 1. Activamos la seguridad por método
-  public class SecurityConfig { ... }
+  @PreAuthorize("hasRole('ADMIN')")
+  public void deleteById(Long id) { docs.remove(id); }
   ```
+- **Analogía** — el guardia te lee el gafete ANTES de dejarte entrar a la sala del servidor.
+- **Casos de Uso Empresariales** — DELETEs administrativos, aprobacion de creditos, cambio de precio de catalogo.
+
+#### 3. `@PostAuthorize` y object-level security
+- **Qué es** — verificacion posterior: el metodo se ejecuta y luego SpEL evalua `returnObject`. Si es falso, Spring descarta el resultado y lanza `AccessDeniedException`.
+- **Por qué importa** — es la unica forma limpia de decir "solo puedes ver TU documento".
+- **Código**:
   ```java
-  @RestController
-  @RequestMapping("/api/documents")
-  public class DocumentController {
-  
-      // Solo usuarios con ROL ADMIN pueden ejecutar esto
-      @PreAuthorize("hasRole('ADMIN')")
-      @DeleteMapping("/{id}")
-      public void deleteDocument(@PathVariable Long id) { ... }
-  
-      // SpEL Avanzado: El usuario solo puede ver el documento si el usuario actual
-      // es EXACTAMENTE el dueño del documento (id coincidente)
-      @PreAuthorize("#userId == authentication.principal.id or hasRole('ADMIN')")
-      @GetMapping("/user/{userId}")
-      public List<Document> getUserDocs(@PathVariable Long userId) { ... }
-  }
+  @PostAuthorize("returnObject.owner == authentication.name")
+  public Document findById(Long id) { return docs.get(id); }
   ```
+- **Analogía** — el guardia te deja entrar al archivador, pero antes de que salgas con la carpeta revisa que sea la tuya. Si no lo es, la confisca.
+- **Casos de Uso Empresariales** — multi-tenant (un usuario solo ve datos de su empresa), banca personal (solo tus cuentas), historial medico (solo tu ficha).
 
-#### 2. Entendiendo y Configurando CORS
-- **Qué es** — Configurar tu backend para que acepte peticiones desde el servidor donde está alojado tu frontend (ej. Vercel o Netlify).
-- **Código** — Configuración global (La mejor práctica):
-  ```java
-  @Bean
-  public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-      http
-          // 1. Inyecta la configuración CORS al filtro de seguridad
-          .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-          // ... resto de config
-          .authorizeHttpRequests(auth -> auth.anyRequest().authenticated());
-          
-      return http.build();
-  }
-  
-  @Bean
-  public CorsConfigurationSource corsConfigurationSource() {
-      CorsConfiguration configuration = new CorsConfiguration();
-      
-      // SOLO permite que este frontend te haga peticiones
-      configuration.setAllowedOrigins(List.of("https://mi-frontend-real.com", "http://localhost:4200"));
-      // Permite los métodos que necesites
-      configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-      // Permite que el frontend te envíe el token de Autorización
-      configuration.setAllowedHeaders(List.of("Authorization", "Content-Type"));
-      
-      UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-      source.registerCorsConfiguration("/**", configuration); // Aplica a todas tus rutas
-      return source;
-  }
-  ```
+#### 4. `AccessDeniedHandler`
+- **Qué es** — bean que traduce `AccessDeniedException` en una respuesta HTTP.
+- **Por qué importa** — sin este handler, la excepcion lanzada por el proxy AOP puede burbujear al `DispatcherServlet` y convertirse en 500. Nosotros la fijamos en 403.
 
-#### 3. El Dilema del CSRF (Cookies vs JWT)
-- **El Concepto Vital:** El CSRF se basa en que los navegadores envían automáticamente todas las Cookies al servidor de destino. Si autenticas a tus usuarios con `JSESSIONID` (Cookies), un script malicioso puede hacer un POST a tu banco y el navegador adjuntará la cookie.
-- **La Solución (Monolitos):** Mantener `.csrf(csrf -> csrf.withDefaults())` activado. Spring generará un Token CSRF aleatorio que el Frontend debe leer y enviar como un Header oculto en cada POST. Si no coincide, Spring rechaza el POST con un HTTP 403.
-- **La Solución (APIs REST con JWT):** Si usas React/Angular y guardas tu JWT en `localStorage`, tú mismo debes enviar el header `Authorization: Bearer <token>`. El navegador NUNCA envía ese header automáticamente. Por tanto, las APIs REST Stateless son **inmunes** al CSRF.
-  ```java
-  http
-      // Si tu app es 100% REST con JWT, es completamente seguro deshabilitarlo
-      .csrf(csrf -> csrf.disable()) 
-      .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
-  ```
+### Antes vs Ahora (Java 8 / Spring Security 5 → Java 21 / Spring Security 7)
 
-#### 4. Edge Cases y Errores Comunes
+| Aspecto | ANTES (Java 8, Security 5) | AHORA (Java 21, Security 7) |
+|--------|-----------------------------|------------------------------|
+| Habilitar method security | `@EnableGlobalMethodSecurity(prePostEnabled = true)` | `@EnableMethodSecurity` (default `prePostEnabled=true`) |
+| Config base | `extends WebSecurityConfigurerAdapter` + `@Override configure(...)` | `@Bean SecurityFilterChain filterChain(HttpSecurity http)` |
+| Reglas HTTP | `antMatchers("/x").hasRole("A")` | `requestMatchers("/x").hasRole("A")` |
+| Autorizacion por URL en `web.xml` | `<security-constraint><url-pattern>/admin/*</url-pattern><auth-constraint><role-name>ADMIN</role-name></auth-constraint></security-constraint>` | `@PreAuthorize("hasRole('ADMIN')")` en el metodo del servicio |
+| DTO/objeto de dominio | POJO con getters/setters/equals/hashCode (30+ lineas) | `public record Document(Long id, String content, String owner) {}` |
+| Chequeo de owner en servicio | `if (!doc.getOwner().equals(auth.getName())) throw new AccessDeniedException(...)` | `@PostAuthorize("returnObject.owner == authentication.name")` |
+| Cliente HTTP en test | `TestRestTemplate` (ELIMINADO en Boot 4.1.0) | `RestClient.builder().baseUrl("http://localhost:" + port).build()` |
+| Puerto aleatorio | `@LocalServerPort` en `org.springframework.boot.web.server` | `@LocalServerPort` en `org.springframework.boot.test.web.server` |
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| 403 CORS Error persistente | Falla el "Preflight Request" (`OPTIONS`). | El navegador primero envía un `OPTIONS` vacío para preguntar permisos. Si tu `SecurityFilterChain` requiere autenticación para TODOS los requests, bloquea el `OPTIONS` (porque no lleva JWT). Asegúrate de configurar `.cors()` antes de la autorización para que Spring responda los Preflights automáticamente. |
-| `hasRole('ADMIN')` falla (Retorna 403 siempre) | Tus Authorities en el Token/BD dicen "ADMIN" | Spring Security espera por defecto que los roles empiecen con el prefijo "ROLE_". Debes tener en BD "ROLE_ADMIN", o usar `hasAuthority('ADMIN')` en vez de `hasRole`. |
-| Postman funciona, el Navegador no | Postman no respeta las políticas CORS (es una app de escritorio) | Las restricciones CORS son un acuerdo de honor implementado por los navegadores (Chrome, Safari). Siempre debes probar la integración CORS desde un navegador real ejecutando tu app de React/Angular/JS. |
+### FAQ del Alumno
 
----
+- **¿Cual es la diferencia entre `@PreAuthorize` y la seguridad por URL del modulo 13?**
+  URL-based protege el ENDPOINT (`/admin/**` solo ADMIN). Method security protege el METODO del servicio, y con `@PostAuthorize` incluso el OBJETO retornado. Se pueden y deben usar juntas.
+
+- **¿Por que Spring pide `ROLE_ADMIN` pero yo escribo `hasRole('ADMIN')` sin `ROLE_`?**
+  Porque el metodo `hasRole` agrega el prefijo `ROLE_` por ti. Si escribes `hasAuthority('ADMIN')` NO lo agrega. Es fuente comun de bugs.
+
+- **¿Cuando uso `@PreAuthorize` y cuando `@PostAuthorize`?**
+  `@PreAuthorize` cuando la decision se puede tomar solo con el usuario y los parametros. `@PostAuthorize` cuando necesitas mirar el resultado (typically para reglas por dueño de recurso).
+
+- **¿Por que `@PostAuthorize` ejecuta el metodo aunque luego lo rechace?**
+  Porque necesita el `returnObject` para evaluar la expresion. Es mas costoso; uselo solo cuando la regla depende del resultado. Si el metodo tiene efectos secundarios (por ej. envia un email), NO uses `@PostAuthorize` — usa `@PreAuthorize` con parametros suficientes.
+
+- **¿Por que en el test `@LocalServerPort` viene de `org.springframework.boot.test.web.server`?**
+  En Spring Boot 4.1.0 se movio ahi. Es la ubicacion documentada en `MEMORY.md`.
+
+- **¿Por que no hay `TestRestTemplate`?**
+  Fue eliminado en Boot 4.1.0. El reemplazo es `RestClient` de Spring Framework 7.
+
+- **¿Que hace `csrf.disable()`?**
+  Desactiva el token CSRF. Es seguro en APIs REST stateless con Basic Auth/JWT. En apps con formularios y cookies debe estar ENCENDIDO.
+
+- **¿Que es `authentication.name` dentro del SpEL?**
+  Es el username del usuario logeado (el mismo que devuelve `Authentication#getName()`).
 
 ### Ejercicios
-1. Crea un controlador con tres endpoints: `/publico`, `/user/datos` y `/admin/borrar`.
-2. Activa `@EnableMethodSecurity`.
-3. Anota `/admin/borrar` con `@PreAuthorize("hasRole('ADMIN')")`.
-4. Inyecta usuarios en memoria (`InMemoryUserDetailsManager`), uno con rol `USER` y otro con rol `ADMIN`.
-5. Inicia sesión como `USER` e intenta acceder a `/admin/borrar`. Verifica que recibes un HTTP 403 Forbidden.
-6. (Para CORS) Levanta tu aplicación en el puerto 8080. Crea un archivo `index.html` estático en el puerto 3000 (usando Python `http.server` o NodeJS) que haga un `fetch('http://localhost:8080/publico')`. Verás el error CORS en la consola del navegador.
-7. Aplica la configuración de `CorsConfigurationSource` permitiendo a `http://localhost:3000`. Refresca el HTML y observa cómo ahora el Fetch tiene éxito.
+1. Añade un tercer usuario `manager` con roles `USER` y `MANAGER`. Crea un metodo `approve(Long id)` autorizado solo para `MANAGER`.
+2. Cambia `@PostAuthorize` para permitir tambien al `ADMIN` ver cualquier documento: `returnObject.owner == authentication.name or hasRole('ADMIN')`.
+3. Añade `@PreFilter`/`@PostFilter` sobre `findAll()` para que devuelva solo los documentos del owner autenticado (excepto ADMIN, que ve todos).
+4. Extrae las reglas SpEL a un `PermissionEvaluator` personalizado y usalo como `hasPermission(#id, 'Document', 'READ')`.
 
 ### Cómo ejecutar
-```bash
-cd 33-security-avanzado
-mvn spring-boot:run
 
-# Probar acceso de un usuario a recurso de Admin (Rechazado)
-curl -u user:password http://localhost:8080/api/admin/borrar -v
+```bash
+# Git Bash
+./build.sh
+java -jar target/security-avanzado-1.0.0.jar
+```
+
+```powershell
+# PowerShell
+.\build.ps1
+java -jar target\security-avanzado-1.0.0.jar
+```
+
+Ejemplos con `curl`:
+```bash
+# admin lista todo
+curl -u admin:admin123 http://localhost:8080/api/docs
+# user ve su doc
+curl -u user:user123 http://localhost:8080/api/docs/2
+# user intenta ver doc ajeno → 403
+curl -u user:user123 http://localhost:8080/api/docs/1
+# admin borra
+curl -u admin:admin123 -X DELETE http://localhost:8080/api/docs/2
+# user intenta borrar → 403
+curl -u user:user123 -X DELETE http://localhost:8080/api/docs/1
 ```
 
 ### Archivos del Proyecto
+
 | Archivo | Propósito |
-|---------|-----------|
-| `config/SecurityConfig.java` | Configuración de CORS y desactivación de CSRF (Stateless). |
-| `controller/AdminController.java` | Controladores protegidos con `@PreAuthorize`. |
-| `service/CustomUserDetailsService.java` | Carga de usuarios y asignación de Authorities (`ROLE_ADMIN`). |
+|--------|-----------|
+| `pom.xml` | Coordenadas Maven + dependencias (web, security, security-test). |
+| `build.sh` / `build.ps1` | Scripts con toolchain portable (JDK 21 + Maven 3.9.16). |
+| `src/main/resources/application.yml` | Configuracion base. |
+| `SecurityAvanzadoApplication.java` | Punto de entrada `main`. |
+| `config/SecurityConfig.java` | `@EnableMethodSecurity` + `SecurityFilterChain` + usuarios in-memory + `AccessDeniedHandler`. |
+| `domain/Document.java` | Record con `id`, `content`, `owner`. |
+| `service/DocumentService.java` | Reglas `@PreAuthorize` / `@PostAuthorize`. |
+| `controller/DocumentController.java` | Endpoints REST `/api/docs`. |
+| `test/.../SecurityAvanzadoApplicationTests.java` | `contextLoads`. |
+| `test/.../MethodSecurityIntegrationTest.java` | Tests de integracion con `RestClient` + `@LocalServerPort`. |
