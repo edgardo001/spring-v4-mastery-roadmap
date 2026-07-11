@@ -193,17 +193,74 @@ Un método alternativo que se ejecuta cuando el Circuit Breaker está abierto o 
 
 ### Cómo ejecutar
 ```bash
-cd 30-resilience4j
-mvn spring-boot:run
+# Windows PowerShell
+./build.ps1
+java -jar target/resilience4j-1.0.0.jar
 
-# Llama repetidamente para observar cómo se ABRE el circuito
-curl http://localhost:8080/api/checkout/1
+# Git Bash
+./build.sh
+java -jar target/resilience4j-1.0.0.jar
+
+# O directamente con Maven portable
+../apache-maven-3.9.16/bin/mvn spring-boot:run
+
+# Probar el endpoint (las primeras llamadas atraviesan Retry; el CB se abre si sigue fallando):
+curl http://localhost:8080/api/resilience/call
 ```
 
-### Archivos del Proyecto
+### Implementación (Módulo 30 — código incluido)
+
+Este módulo **no** usa `resilience4j-spring-boot3` (esa autoconfig está publicada para Boot 3.x y no está homologada con Spring Boot 4.1.0). En su lugar usamos la **API programática** de Resilience4j: `resilience4j-circuitbreaker` + `resilience4j-retry`, construyendo los objetos `CircuitBreaker` y `Retry` como `@Bean` y decorando manualmente el `Supplier<String>` que invoca al servicio.
+
+**Piezas clave:**
+
+- `FlakyService.call()` — servicio "inestable" que lanza `RuntimeException` en las primeras 3 llamadas y luego retorna `OK`.
+- `ResilienceConfig` — define dos beans:
+  - `CircuitBreaker` con `failureRateThreshold=50%`, `slidingWindowSize=4`, `waitDurationInOpenState=5s`.
+  - `Retry` con `maxAttempts=3`, `waitDuration=100ms`, reintenta ante cualquier `RuntimeException`.
+- `ResilientClient.callWithProtection()` — compone `Retry.decorateSupplier(retry, CircuitBreaker.decorateSupplier(cb, flaky::call))` y ejecuta.
+- `ResilienceController` — expone `GET /api/resilience/call`.
+
+**Tests:**
+- `ResilienceApplicationTests.contextLoads` — el contexto arranca con los beans bien cableados.
+- `ResilientClientTest` (`@SpringBootTest`) — verifica que `flakyService.call()` sin protección lanza excepción y que `callWithProtection()` termina retornando `OK`.
+- `ResilienceControllerTest` — MockMvc **standalone** (no usamos `@WebMvcTest`, eliminado en Boot 4), cableando el controller a mano con un `Retry` amplio para asegurar respuesta OK en un solo request.
+
+### Antes vs Ahora (Java 8 → Java 21) — aplicado al módulo
+
+| Situación | Java 8 clásico (try-catch + Thread.sleep) | Java 21 + Resilience4j (declarativo) |
+|-----------|-------------------------------------------|--------------------------------------|
+| Reintentar N veces | `for (int i=0; i<3; i++) { try { return svc.call(); } catch (Ex e) { Thread.sleep(100); } }` | `Retry.decorateSupplier(retry, svc::call).get()` |
+| Cortar cascada de fallos | Contador manual + variable `boolean broken` + timestamp de "quema" | `CircuitBreaker.decorateSupplier(cb, svc::call).get()` |
+| Componer políticas | `try { retry-loop { circuit-check { ... } } }` — anidamiento profundo | Composición fluida de `Supplier` con dos decoradores |
+| Contador thread-safe | `synchronized int counter` | `AtomicInteger counter` |
+| Referencia a método | `new Supplier<String>() { public String get() { return svc.call(); } }` | `svc::call` (method reference) |
+| Predicado de excepción | Clase anónima `Predicate<Throwable>` | Lambda: `ex -> ex instanceof RuntimeException` |
+
+### FAQ del Alumno
+
+- **¿Por qué NO usé `@CircuitBreaker` como anotación?** Porque la anotación viene de `resilience4j-spring-boot3`, cuyo autoconfig no está publicado para Boot 4.1.0. Se puede lograr el mismo efecto de forma **programática** definiendo un `@Bean CircuitBreaker` y envolviendo el `Supplier`.
+- **¿Qué es un `Supplier<String>`?** Una interfaz funcional de Java 8: representa "algo que, cuando lo invocas con `.get()`, te devuelve un String". Resilience4j la usa para envolver la operación real y meterla en su pipeline de protección.
+- **¿Qué diferencia hay entre `Retry` y `CircuitBreaker`?** `Retry` insiste (vuelve a llamar); `CircuitBreaker` observa la tasa de fallos y CORTA temporalmente para no seguir gastando recursos. Se usan juntos.
+- **¿Qué es "sliding window"?** La ventana de las últimas N llamadas que el CB observa para calcular el % de fallo. Configurada en 4: si 2 de las últimas 4 fallaron, abre el circuito.
+- **¿Cuándo se cierra el circuito de vuelta?** Después de `waitDurationInOpenState` (5 s aquí), pasa a `HALF_OPEN` y deja pasar 2 llamadas de prueba; si tienen éxito, vuelve a `CLOSED`.
+- **¿Por qué el test de MockMvc no usa `@WebMvcTest`?** Porque Spring Boot 4.1.0 eliminó `@WebMvcTest` (ver `MEMORY.md`). Patrón portable: `MockMvcBuilders.standaloneSetup(new Controller(deps)).build()`.
+- **¿Qué es `AtomicInteger`?** Un contador thread-safe sin `synchronized`. Sus métodos (`incrementAndGet`, `get`) son atómicos gracias a instrucciones CAS del procesador.
+- **¿Qué es un "method reference" (`::`)?** Azúcar sintáctico para lambdas simples. `flakyService::call` equivale a `() -> flakyService.call()`.
+
+### Archivos del Proyecto (implementación)
+
 | Archivo | Propósito |
 |---------|-----------|
-| `pom.xml` | Dependencias de Resilience4j, AOP y Actuator. |
-| `application.yml` | Reglas del CircuitBreaker (umbrales, ventanas de tiempo) y Retry. |
-| `service/InventoryService.java` | Lógica de integración externa con protección de Circuit Breaker y Fallback. |
-| `service/PaymentService.java` | Lógica protegida con `@Retry`. |
+| `pom.xml` | Boot 4.1.0 + `resilience4j-circuitbreaker` 2.2.0 + `resilience4j-retry` 2.2.0 + `spring-aspects` + `aspectjweaver`. |
+| `build.sh` / `build.ps1` | Scripts con toolchain portable (JDK 21 + Maven 3.9.16 de la raíz). |
+| `src/main/resources/application.yml` | Config mínima (no incluye bloque `resilience4j:` porque no usamos autoconfig). |
+| `ResilienceApplication.java` | Punto de entrada Spring Boot. |
+| `config/ResilienceConfig.java` | Beans programáticos `CircuitBreaker` + `Retry`. |
+| `service/FlakyService.java` | Servicio que falla las 3 primeras llamadas. |
+| `service/ResilientClient.java` | Compone Retry + CircuitBreaker sobre `flakyService.call()`. |
+| `controller/ResilienceController.java` | `GET /api/resilience/call`. |
+| `ResilienceApplicationTests.java` | `contextLoads`. |
+| `service/ResilientClientTest.java` | `@SpringBootTest` — Flaky sin protección falla, con protección retorna OK. |
+| `controller/ResilienceControllerTest.java` | MockMvc standalone → `200 OK` + respuesta `OK from FlakyService...`. |
+| `target/resilience4j-1.0.0.jar` | Artefacto ejecutable (`java -jar`). |

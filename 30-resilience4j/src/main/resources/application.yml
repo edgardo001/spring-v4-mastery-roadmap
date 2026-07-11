@@ -1,0 +1,8 @@
+# application.yml — Configuración mínima del módulo 30.
+# No usamos resilience4j-spring-boot3 (por eso NO hay bloque "resilience4j:" aquí).
+# Toda la config del CircuitBreaker/Retry se hace en Java, en ResilienceConfig.java.
+server:
+  port: 8080
+spring:
+  application:
+    name: resilience4j-demo
