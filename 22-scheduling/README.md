@@ -175,10 +175,98 @@ mvn spring-boot:run
 # No hay necesidad de curl, solo mira la consola para ver los logs apareciendo automáticamente.
 ```
 
-### Archivos del Proyecto
+### Archivos del Proyecto (implementación real de este módulo)
 | Archivo | Propósito |
 |---------|-----------|
-| `config/SchedulerConfig.java` | `@EnableScheduling` y configuración de hilos (ThreadPool). |
-| `service/CleanupJob.java` | Tareas programadas con `fixedRate` y `fixedDelay`. |
-| `service/ReportJob.java` | Tarea programada usando Cron Expression extraída del YAML. |
-| `application.yml` | Variables de configuración de intervalos de tiempo. |
+| `SchedulingApplication.java` | Punto de entrada (`SpringApplication.run`). |
+| `config/SchedulingConfig.java` | Activa `@EnableScheduling` (interruptor general del scheduler). |
+| `service/HeartbeatService.java` | `@Scheduled(fixedRate=5000)` + `@Scheduled(cron="*/2 * * * * *")`, contadores atómicos. |
+| `controller/HeartbeatController.java` | `GET /api/heartbeat` → `{tick, cron}`. |
+| `application.yml` | `server.port=8080`, `spring.application.name`. |
+| `build.sh` / `build.ps1` | Compila con JDK 21 + Maven portable → `target/scheduling-1.0.0.jar`. |
+| `src/test/.../SchedulingApplicationTests.java` | `contextLoads` con `@SpringBootTest`. |
+| `src/test/.../HeartbeatServiceTest.java` | Test unitario invocando los métodos directamente (rápido, sin `Thread.sleep`). |
+| `src/test/.../HeartbeatControllerTest.java` | MockMvc **standalone** (Boot 4 no tiene `@WebMvcTest`). |
+
+---
+
+### Antes (Java 8 / manual) vs Ahora (Java 21 + Spring Boot 4)
+
+Comparación aplicada al mismo problema: "quiero un método que se ejecute automáticamente cada 5 segundos y otro cada 2 segundos".
+
+| Aspecto | ANTES (`java.util.Timer`) | AHORA (`@Scheduled`) |
+|---------|---------------------------|----------------------|
+| Activación | `new Timer().scheduleAtFixedRate(new TimerTask(){...}, 0, 5000);` en el main | Anotación `@Scheduled(fixedRate = 5000)` sobre el método |
+| Ciclo de vida | Tú creas y matas el Timer manualmente | Spring lo gestiona junto con el contexto |
+| Cron real | `Timer` no soporta cron; había que calcular a mano con `Calendar` | `@Scheduled(cron = "*/2 * * * * *", zone = "...")` |
+| Reintentos / errores | Si la `TimerTask` lanza excepción, el Timer entero muere | Spring loguea y continúa |
+| Configuración externa | Recompilar para cambiar el intervalo | `@Scheduled(cron = "${app.cron.billing}")` en YAML |
+| Testeo | Muy difícil (hilos manuales) | Llamás el método directamente en JUnit |
+
+Snippet ANTES (Java 8):
+```java
+public static void main(String[] args) {
+    Timer timer = new Timer(true);
+    timer.scheduleAtFixedRate(new TimerTask() {
+        int count = 0;
+        @Override public void run() {
+            count++;
+            System.out.println("tick #" + count);
+        }
+    }, 0, 5000);
+    // Y el cron cada 2s... implementar a mano con Calendar. Un dolor.
+}
+```
+
+Snippet AHORA (Java 21 + Boot 4):
+```java
+@Service
+public class HeartbeatService {
+    private final AtomicInteger tickCount = new AtomicInteger();
+    @Scheduled(fixedRate = 5000)
+    public void heartbeat() { tickCount.incrementAndGet(); }
+
+    @Scheduled(cron = "*/2 * * * * *")
+    public void cronTick() { /* ... */ }
+}
+```
+
+Concurrencia (contador):
+
+| ANTES (Java 8) | AHORA (Java 21) |
+|----------------|-----------------|
+| `private int count; public synchronized void inc(){count++;}` | `private final AtomicInteger count = new AtomicInteger(); count.incrementAndGet();` |
+
+---
+
+### FAQ del Alumno
+
+**P: ¿Qué diferencia hay entre `fixedRate` y `fixedDelay`?**
+R: `fixedRate` mide desde el INICIO de la ejecución anterior. `fixedDelay` mide desde el FIN. Si tu método tarda 3s y ponés `fixedRate=5000`, entre inicios pasan 5s. Con `fixedDelay=5000`, entre fin e inicio pasan 5s (total 8s por ciclo).
+
+**P: Si no pongo `@EnableScheduling`, ¿qué pasa con mis `@Scheduled`?**
+R: Nada. Spring los ignora silenciosamente. No hay error de compilación ni de arranque. Es un error clásico de principiantes: buscar por qué "no corre mi tarea" y descubrir que faltaba activar el motor.
+
+**P: ¿Puede un método `@Scheduled` recibir parámetros?**
+R: No. Debe ser `void`, sin argumentos. Spring dispara la ejecución, no tiene forma de saber qué pasarle. Si necesitás datos, obtenelos dentro del método (repositorio, config, etc.).
+
+**P: ¿Por qué mi test con `Thread.sleep(6000)` tarda 6 segundos?**
+R: Porque el test real espera al scheduler. En este módulo evitamos ese enfoque llamando `service.heartbeat()` directamente (test <100ms). La lógica que probamos es "el contador sube", no "Spring sabe programar" (eso ya lo probó Spring).
+
+**P: ¿Y si tengo 3 `@Scheduled` y todos se disparan al mismo segundo?**
+R: Por defecto Spring usa **1 solo hilo**. Se ejecutan en secuencia y las siguientes esperan. Si una se cuelga, las demás no corren nunca. En producción hay que configurar un `ThreadPoolTaskScheduler` con `poolSize > 1` (ver concepto #3 del README).
+
+**P: Si despliego 3 réplicas en Kubernetes, ¿se ejecuta 3 veces?**
+R: SÍ. Y eso puede ser catastrófico (3 emails de facturación al mismo cliente). Solución: **ShedLock** (candado en BD compartida) o **Quartz** con almacenamiento JDBC.
+
+**P: ¿Por qué usar `AtomicInteger` en vez de `int` con `synchronized`?**
+R: Ambos funcionan. `AtomicInteger` es más liviano (usa CPU instructions atómicas), más idiomático y evita olvidar `synchronized` en un getter. En un contador simple es la elección natural.
+
+**P: ¿Puedo tener `@Scheduled` en un `@RestController`?**
+R: Técnicamente sí, pero es mala práctica. Separa responsabilidades: el controller responde HTTP, el service ejecuta la lógica programada. Este módulo lo respeta.
+
+**P: ¿El scheduler corre en tests?**
+R: Sí, en cuanto arrancás `@SpringBootTest` (por eso `SchedulingApplicationTests` puede tener contadores > 0 si el test durara). Para tests unitarios rápidos, usamos POJOs directos sin arrancar Spring.
+
+**P: ¿Cómo paso el intervalo por configuración?**
+R: `@Scheduled(fixedRateString = "${app.tick.rate:5000}")` o `@Scheduled(cron = "${app.cron.report}")`. El `:5000` es el default si la propiedad no existe.

@@ -1,0 +1,13 @@
+# application.yml — Configuración del módulo 22 (scheduling).
+#
+# ANTES (Java 8 / properties clásicas):
+#   server.port=8080
+#   spring.application.name=scheduling
+#
+# AHORA (YAML jerárquico, más legible):
+server:
+  port: 8080
+
+spring:
+  application:
+    name: scheduling
