@@ -1,6 +1,6 @@
 # Spring v4 Mastery Roadmap
 
-Ruta completa para aprender **Spring Boot 4 + Spring Framework 7** desde los fundamentos hasta arquitecturas empresariales (61 módulos). Cada concepto tiene su propia carpeta con teoría, ejemplos y ejercicios.
+Ruta completa para aprender **Spring Boot 4 + Spring Framework 7** desde los fundamentos hasta arquitecturas empresariales (62 módulos). Cada concepto tiene su propia carpeta con teoría, ejemplos y ejercicios.
 
 ## Requisitos
 
@@ -73,7 +73,8 @@ spring/
 ├── 58-spring-ai/                # Spring AI: vectores, embeddings, prompts
 ├── 59-reactive/                 # Spring WebFlux, R2DBC, Project Reactor
 ├── 60-spring-modulith/          # Spring Modulith, módulos, testing
-└── 61-rsocket/                  # RSocket, comunicación reactiva bidireccional
+├── 61-rsocket/                  # RSocket, comunicación reactiva bidireccional
+└── 62-vertical-slice-architecture/ # Vertical Slice Architecture (feature-based folders)
 ```
 
 ## Nivel 1 — Fundamentos (Días 1–7)
@@ -133,7 +134,7 @@ spring/
 | 36 | `36-testcontainers` | TestContainers: PostgreSQL, MySQL, Kafka, Redis, `@ServiceConnection`, `@DynamicPropertySource` |
 | 37 | `37-internacionalizacion` | `MessageSource`, `LocaleResolver`, `AcceptHeaderLocaleResolver`, i18n en REST |
 
-## Nivel 5 — Arquitecturas Software (Días 38–42)
+## Nivel 5 — Arquitecturas Software (Días 38–42, 62)
 
 | # | Carpeta | Tema |
 |---|---------|------|
@@ -142,6 +143,7 @@ spring/
 | 40 | `40-event-driven` | `ApplicationEventPublisher`, Domain Events, SAGA coreográfica, Event Sourcing |
 | 41 | `41-microservicios` | Spring Cloud: Eureka (Discovery), Gateway, Config, Resilience4j, Docker Compose |
 | 42 | `42-ddd` | Value Objects, Aggregates, Repository pattern, Domain Events, Lenguaje Ubicuo |
+| 62 | `62-vertical-slice-architecture` | Feature-based folders (Command/Query/Handler/Endpoint), alternativa a capas horizontales |
 
 ## Nivel 6 — Integración Frontend (Días 43–44)
 

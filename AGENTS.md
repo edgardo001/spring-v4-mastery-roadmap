@@ -214,6 +214,22 @@ Los tres toolchains viven en la RAÍZ del roadmap y están excluidos del repo po
 
 Los scripts `build.sh` / `build.ps1` de cada módulo deben **exportar `JAVA_HOME` al JDK portable** antes de invocar `mvn` / `gradle` (el sistema del desarrollador tiene Java 17).
 
+## Elección de Arquitectura
+
+El roadmap enseña varias arquitecturas y NO impone una única. Escoge según la escala y el contexto:
+
+| Arquitectura | Módulo | Cuándo elegirla |
+|---|---|---|
+| **Capas horizontales** (Controller → Service → Repository) | 04, 06, 07 | Default educativo. Simple para CRUD pequeños. Se vuelve espagueti al escalar features. |
+| **Hexagonal / Puertos y Adaptadores** | 38 | Cuando el dominio es rico y quieres poder cambiar infra (BD, mensajería, UI) sin tocar la lógica de negocio. |
+| **DDD Táctico** | 42 | Cuando el dominio tiene reglas de negocio complejas: Aggregates, Value Objects, invariantes fuertes. |
+| **Monolito Modular** | 39 | Múltiples bounded contexts en el mismo deploy, comunicándose por eventos. Alternativa pragmática a microservicios. |
+| **Vertical Slice Architecture** | 62 | Cuando cada feature debe ser autónoma (Command/Handler/Endpoint por feature). Ideal si el equipo agrega features rápido y quieres minimizar el "cambia archivos en 5 carpetas para tocar 1 feature". |
+| **Event-driven** | 40 | Cuando la reacción asíncrona a eventos (email, factura, analytics) es central y quieres desacoplar productores de consumidores. |
+| **Microservicios** | 41 | Cuando distintos servicios tienen SLAs, teams, deploys y escalas independientes. Añade overhead operacional. |
+
+**Regla del pulgar:** empieza con capas horizontales; migra a hexagonal si el dominio crece; adopta vertical slice si el equipo crece y las features chocan en las mismas carpetas.
+
 ## Workflow Multi-Agente por Módulo
 
 Antes de escribir código de un módulo, dispatchar en paralelo a los siguientes agentes de revisión con la especificación mínima:
