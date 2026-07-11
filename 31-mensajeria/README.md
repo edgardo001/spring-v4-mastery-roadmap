@@ -1,190 +1,157 @@
-## 31 — Mensajería Asíncrona (RabbitMQ y Apache Kafka)
+# Módulo 31 — Mensajería (ApplicationEventPublisher)
 
-### Propósito
-Aprender a desacoplar microservicios utilizando colas de mensajes (Message Brokers). En lugar de que el "Servicio A" llame directamente al "Servicio B" por HTTP, el "Servicio A" dejará un mensaje en una cola y el "Servicio B" lo leerá cuando esté listo.
+## Propósito
+Aprender el patrón **Publish/Subscribe** (publicar/suscribir) dentro de una sola JVM usando el `ApplicationEventPublisher` que trae Spring Boot. Este módulo es la puerta de entrada al mundo de la mensajería **antes** de saltar a brokers externos (RabbitMQ, Kafka).
 
-### Problema que resuelve
-El acoplamiento temporal y espacial de las peticiones REST (HTTP).
-- **Caídas en Cadena:** Si el Microservicio de Facturación se cae, el Microservicio de Ventas no podrá completar la compra porque su llamada HTTP `POST /facturar` fallará. Se pierden ventas.
-- **Picos de Tráfico:** Si tu e-commerce tiene una venta flash (Black Friday) y recibe 10,000 pedidos por minuto, la base de datos de Facturación colapsará intentando procesar todo al instante.
+## Problema que resuelve
+Cuando un servicio `OrderService` crea un pedido, necesitamos disparar N acciones colaterales: enviar email, actualizar métricas, notificar auditoría, activar métricas, etc. Si el service llama a cada uno directamente (`emailService.send(...)`, `auditService.log(...)`), el código se **acopla** y cualquier nueva acción obliga a modificar `OrderService`.
 
-### Cómo lo resuelve
-Introducimos un intermediario (Broker) como RabbitMQ o Kafka. 
-1. El Servicio de Ventas genera el pedido y envía un mensaje: *"Oye, se vendió el producto X"*. Lo deja en la cola y le responde al cliente "Compra exitosa" en 10 milisegundos.
-2. El Servicio de Facturación lee la cola. Si hay 10,000 mensajes, no entra en pánico; los va procesando poco a poco (a su propio ritmo). Si Facturación se apaga por 2 horas, los mensajes se quedan guardados en la cola de forma segura. Cuando Facturación vuelva a encender, empezará a procesar desde donde se quedó.
+## Cómo lo resuelve
+El service publica un **evento** (`OrderCreatedEvent`) al bus interno de Spring. Cualquier bean anotado con `@EventListener` que reciba ese tipo lo procesará. `OrderService` no sabe cuántos oyentes hay ni quiénes son. **Desacoplamiento total**.
 
-### Por qué aprenderlo
-La mensajería es el corazón de las arquitecturas de microservicios modernas (Event-Driven Architecture). Es el único mecanismo que garantiza verdadera tolerancia a fallos y escalabilidad masiva. Sin dominar RabbitMQ o Kafka, no puedes diseñar sistemas distribuidos resilientes.
+## Por qué aprenderlo
+Es el mismo modelo mental que Kafka/RabbitMQ, pero **sin infraestructura**. Cuando pases a brokers externos ya conocerás el patrón; solo cambia el transporte.
 
 ```mermaid
-sequenceDiagram
-    participant V as Servicio Ventas (Productor)
-    participant B as RabbitMQ / Kafka (Broker)
-    participant F as Servicio Facturación (Consumidor)
-
-    V->>V: 1. Guarda Venta localmente
-    V->>B: 2. Publica Mensaje ("Venta #100")
-    Note over V,B: Ventas no espera respuesta
-    V-->>Cliente: 3. "Su pedido está siendo procesado"
-    
-    B->>F: 4. Entrega Mensaje ("Venta #100")
-    F->>F: 5. Genera Factura en PDF y envía email
-    F-->>B: 6. ACK (Mensaje procesado con éxito)
+flowchart LR
+    A[Cliente HTTP] -->|POST /api/orders| B[OrderController]
+    B --> C[OrderService]
+    C -->|publishEvent| D{ApplicationEventPublisher}
+    D --> E[NotificationListener]
+    D -.-> F[EmailListener - futuro]
+    D -.-> G[AuditListener - futuro]
+    style D fill:#f9d,stroke:#333,color:#000
+    style C fill:#9df,stroke:#333,color:#000
+    style E fill:#9f9,stroke:#333,color:#000
 ```
 
----
+## Glosario Básico
+| Término | Significado |
+|---|---|
+| **Evento** | Objeto inmutable que describe algo que YA pasó (`OrderCreatedEvent`). |
+| **Publisher** | Quien lanza el evento al bus (`OrderService`). |
+| **Listener / Subscriber** | Quien reacciona al evento (`NotificationListener`). |
+| **Bus** | El intermediario de Spring: `ApplicationEventPublisher`. |
+| **Síncrono** | El listener corre en la misma hebra del publisher (por defecto). |
+| **Asíncrono** | El listener corre en otra hebra (`@Async` + `@EnableAsync`). |
+| **Broker** | Software externo (RabbitMQ, Kafka) que mueve mensajes entre JVMs. |
 
-### Glosario Básico
+## Conceptos clave
 
-#### `Producer` (Productor)
-La aplicación que emite o publica el mensaje (Ej: Servicio de Ventas).
+### `ApplicationEventPublisher`
+- **Qué es:** bean autoinyectado por Spring que expone `publishEvent(Object)`.
+- **Por qué importa:** permite desacoplar productor y consumidor dentro de la misma app.
+- **Analogía:** un altavoz en un pasillo: quien grita no conoce a los que escuchan.
+- **Casos de uso empresariales:** auditoría, notificaciones, invalidación de caché, métricas de dominio.
 
-#### `Consumer` (Consumidor)
-La aplicación que está "suscrita" y lee los mensajes (Ej: Servicio de Facturación).
+### `@EventListener`
+- **Qué es:** marca un método como suscriptor. Spring lo enruta por el tipo del parámetro.
+- **Por qué importa:** cero configuración XML/YAML, cero acoplamiento.
+- **Analogía:** una "oreja" pegada al altavoz que solo reacciona a cierta palabra.
 
-#### `Message Broker`
-El servidor intermediario (RabbitMQ, Kafka, ActiveMQ) que recibe, almacena de forma segura y distribuye los mensajes.
+### `record` para eventos
+- **Qué es:** clase inmutable de Java 16+ con constructor/getters/equals/hashCode/toString autogenerados.
+- **Por qué importa:** un evento debe ser inmutable; `record` lo garantiza en 1 línea.
 
-#### `Queue` (Cola) - *RabbitMQ*
-Una estructura de datos FIFO (First-In, First-Out) donde se guardan los mensajes. Cada mensaje es procesado por un solo consumidor.
+## Antes vs Ahora
+| Concepto | ANTES (Java 8 / Spring 4) | AHORA (Java 21 / Spring Boot 4.1.0) |
+|---|---|---|
+| Evento | `class Evt extends ApplicationEvent` con 30 líneas | `record OrderCreatedEvent(Long id, String c) {}` |
+| Suscriptor | `implements ApplicationListener<Evt>` | Cualquier método con `@EventListener` |
+| Inyección | `@Autowired` en campo | Constructor injection (campo `final`) |
+| Test web | `@WebMvcTest` + `MockMvc` autoconfigurado | `MockMvcBuilders.standaloneSetup(...)` **obligatorio** (Boot 4 eliminó `@WebMvcTest`) |
+| Cliente HTTP en tests | `TestRestTemplate` | `RestClient` (Boot 4 eliminó `TestRestTemplate`) |
 
-#### `Topic` (Tópico) - *Kafka*
-Un canal de eventos inmutable. A diferencia de las colas, muchos consumidores distintos pueden leer el mismo mensaje de un Topic.
+## In-memory vs Broker externo
+| Aspecto | `ApplicationEventPublisher` (este módulo) | RabbitMQ / Kafka |
+|---|---|---|
+| Ámbito | Misma JVM | Entre procesos / máquinas |
+| Persistencia | NO (se pierde al reiniciar) | SÍ (cola durable / log) |
+| Entrega garantizada | Best-effort | At-least-once / exactly-once |
+| Reintentos | Manual | Nativos |
+| Backpressure | No aplica | Sí (consumer lag / prefetch) |
+| Curva de aprendizaje | Baja | Media/Alta |
+| Cuándo usarlo | Monolito, side-effects locales, DDD Domain Events | Microservicios, integración de sistemas |
 
----
+> **En producción real** para comunicación entre microservicios usa **Kafka** (log de eventos, alto throughput) o **RabbitMQ** (colas tradicionales, routing complejo). Este módulo es la **base conceptual** que te prepara para ambos.
 
-### Conceptos
+## FAQ del Alumno
 
-#### 1. Implementación Básica con RabbitMQ (AMQP)
-- **Qué es** — Usar el protocolo AMQP para publicar y consumir mensajes usando `RabbitTemplate` y `@RabbitListener`.
-- **Código** — Productores y Consumidores:
-  ```xml
-  <!-- En pom.xml -->
-  <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-amqp</artifactId>
-  </dependency>
-  ```
-  
-  **El Productor (Servicio A):**
-  ```java
-  @Service
-  @Slf4j
-  public class OrderProducer {
-  
-      private final RabbitTemplate rabbitTemplate;
-  
-      public OrderProducer(RabbitTemplate rabbitTemplate) {
-          this.rabbitTemplate = rabbitTemplate;
-      }
-  
-      public void placeOrder(String orderId) {
-          log.info("Enviando orden {} a la cola...", orderId);
-          // Envía al Exchange por defecto, con la routing key "orders.queue"
-          rabbitTemplate.convertAndSend("orders.queue", orderId);
-      }
-  }
-  ```
+**P: ¿El listener corre en otra hebra?**
+R: No por defecto. Es síncrono en la misma hebra del publisher. Añade `@Async` + `@EnableAsync` para asíncrono.
 
-  **El Consumidor (Servicio B):**
-  ```java
-  @Component
-  @Slf4j
-  public class InvoiceConsumer {
-  
-      // Este método se ejecutará automáticamente cada vez que llegue un mensaje
-      @RabbitListener(queues = "orders.queue")
-      public void receiveOrder(String orderId) {
-          log.info("Mensaje recibido. Procesando factura para la orden: {}", orderId);
-          // Lógica de facturación...
-      }
-  }
-  ```
+**P: ¿Qué pasa si un listener lanza excepción?**
+R: En modo síncrono, propaga al publisher y aborta la publicación al resto. En `@Async`, solo se loguea.
 
-#### 2. Configurando el Broker (Docker Compose)
-- Tu código Java necesita un servidor RabbitMQ real al cual conectarse.
-  ```yaml
-  # docker-compose.yml
-  version: '3.8'
-  services:
-    rabbitmq:
-      image: rabbitmq:3-management-alpine # Incluye interfaz web de administración
-      ports:
-        - "5672:5672"   # Puerto de la app
-        - "15672:15672" # Puerto del panel web (admin/admin)
-  ```
-  ```yaml
-  # application.yml
-  spring:
-    rabbitmq:
-      host: localhost
-      port: 5672
-      username: guest
-      password: guest
-  ```
+**P: ¿Puedo tener varios listeners para el mismo evento?**
+R: Sí. Spring los invoca a todos. Puedes ordenarlos con `@Order`.
 
-#### 3. Tipos de Exchanges (Enrutamiento Avanzado)
-- **Qué es** — En la vida real, el Productor no envía a una "Queue", envía a un "Exchange" (El Centro de Distribución), y este enruta el mensaje a diferentes colas basándose en reglas.
-- Tipos comunes:
-  - **Direct**: Enruta exactamente a la cola que coincida con la llave (Routing Key).
-  - **Fanout**: Ignora las llaves y envía una COPIA del mensaje a TODAS las colas conectadas (Patrón Publish/Subscribe). Ej: Avisar a Inventario y a Notificaciones al mismo tiempo.
-  - **Topic**: Enruta usando patrones (ej: `orders.*.created`).
+**P: ¿Los eventos sobreviven a un reinicio?**
+R: **NO.** Este bus es en memoria. Si necesitas persistencia usa Kafka/Rabbit.
 
-#### 4. Alternativa: Apache Kafka
-- **Qué es** — Mientras RabbitMQ es como una oficina de correos (el mensaje se entrega y se borra), Kafka es como un periódico inmutable (el evento se escribe en un registro y se queda ahí por días; muchos sistemas pueden "suscribirse" al periódico).
-- **Por qué importa** — Si tienes 100,000 eventos por segundo, RabbitMQ se satura. Kafka fue diseñado por LinkedIn para manejar millones de eventos por segundo (Big Data, Tracking de clics, Event Sourcing).
-- **Código Kafka (Spring Kafka):**
-  ```java
-  // Productor
-  @Autowired
-  private KafkaTemplate<String, String> kafkaTemplate;
-  
-  public void send(String msg) {
-      kafkaTemplate.send("mi-topico", msg);
-  }
-  
-  // Consumidor
-  @KafkaListener(topics = "mi-topico", groupId = "facturacion-group")
-  public void listen(String message) {
-      log.info("Recibido de Kafka: " + message);
-  }
-  ```
+**P: ¿Por qué no un `record` para el `OrderService`?**
+R: `record` es para datos inmutables. Los servicios tienen comportamiento y dependencias mutables (aunque los campos sean `final`, la lógica cambia); una clase normal es lo adecuado.
 
-#### 5. Edge Cases y Errores Comunes
+**P: ¿Por qué no usar `@Autowired` en el campo?**
+R: Regla del proyecto: **constructor injection** siempre. Da campos `final`, testeabilidad y falla en el arranque si falta el bean (mejor que un `NullPointerException` en runtime).
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| Mensajes Perdidos (Loss) | La aplicación consumió el mensaje, falló a la mitad del proceso, y el mensaje ya se borró de la cola. | Activar el `Acknowledge` manual (ACK). El mensaje solo se borra de RabbitMQ cuando la app confirma que lo procesó sin lanzar excepciones. |
-| Poison Pill (La pastilla envenenada) | Un mensaje está malformado. La app falla al leerlo, lanza excepción, RabbitMQ lo re-encola y la app lo vuelve a leer en un bucle infinito que quema la CPU. | Configurar una **Dead Letter Queue (DLQ)**. Si un mensaje falla 3 veces, enviarlo a la DLQ (la cola de los "muertos") para revisión manual y continuar con el siguiente. |
-| Clases no serializables | Estás enviando el objeto `Order`, pero Spring no sabe cómo pasarlo por la red. | Configurar un `MessageConverter` (como `Jackson2JsonMessageConverter`) para que los objetos se envíen automáticamente como JSON. |
+**P: ¿Por qué el test del controller no usa `@WebMvcTest`?**
+R: **Spring Boot 4.1.0 ELIMINÓ `@WebMvcTest`, `@AutoConfigureMockMvc`, `@DataJpaTest` y `TestRestTemplate`.** El patrón portable oficial del proyecto es `MockMvcBuilders.standaloneSetup(controller).build()`.
 
----
+## Ejercicios
+1. Agregar un segundo listener `AuditListener` que también incremente un contador. Verificar que ambos reciben cada evento.
+2. Convertir el listener a asíncrono (`@Async` + `@EnableAsync`). Ajustar el test para esperar con `Awaitility`.
+3. Agregar un evento `OrderCancelledEvent` y un listener que decremente un stock ficticio.
+4. Ordenar listeners con `@Order(1)` y `@Order(2)`.
 
-### Ejercicios
-1. Crea un proyecto con `spring-boot-starter-amqp`. Levanta RabbitMQ usando el Docker Compose proporcionado.
-2. Crea una clase `@Configuration` y define un Bean para la cola: `new Queue("orders.queue", true);` (true = durable, no se borra si se reinicia Rabbit).
-3. Crea un Controlador REST (`POST /api/orders`) que reciba un String y use `RabbitTemplate` para enviarlo a la cola.
-4. Entra a la consola web de RabbitMQ (`http://localhost:15672`) y verifica que los mensajes están encolados.
-5. Crea un `@Component` con `@RabbitListener` que lea la cola e imprima los mensajes. Inicia la app y verás cómo consume instantáneamente lo que estaba atascado en la cola.
+## Cómo ejecutar
 
-### Cómo ejecutar
+### Build (produce el JAR ejecutable)
+```powershell
+# Windows PowerShell
+.\build.ps1
+```
 ```bash
-cd 31-mensajeria
-
-# 1. Levantar RabbitMQ
-docker-compose up -d
-
-# 2. Correr aplicación Spring
-mvn spring-boot:run
-
-# 3. Enviar mensaje
-curl -X POST http://localhost:8080/api/orders -d "Orden 500"
+# Git Bash / Linux / macOS
+./build.sh
 ```
 
-### Archivos del Proyecto
-| Archivo | Propósito |
-|---------|-----------|
-| `docker-compose.yml` | Servidor RabbitMQ con Management Plugin. |
-| `config/RabbitConfig.java` | Definición de Queues, Exchanges y MessageConverters. |
-| `producer/OrderProducer.java` | Lógica de publicación (`RabbitTemplate`). |
-| `consumer/InvoiceConsumer.java` | Lógica de suscripción (`@RabbitListener`). |
+### Ejecutar el JAR
+```bash
+java -jar target/mensajeria-1.0.0.jar
+```
+
+### Modo desarrollo (Maven)
+```bash
+../apache-maven-3.9.16/bin/mvn spring-boot:run
+```
+
+### Probar con curl
+```bash
+# Crear un pedido (produce el evento)
+curl -X POST "http://localhost:8080/api/orders?customer=Juan"
+# -> HTTP 201
+# -> {"orderId":1,"customer":"Juan","status":"CREATED"}
+
+# En los logs del servidor verás:
+# [NotificationListener] Recibido pedido #1 para cliente Juan
+```
+
+## Archivos del Proyecto
+
+| Archivo | Rol |
+|---|---|
+| `pom.xml` | Coordenadas Maven + dependencias (web, test). |
+| `build.ps1` / `build.sh` | Build portable con JDK 21 + Maven 3.9.16. |
+| `src/main/resources/application.properties` | Configuración (puerto 8080). |
+| `src/main/java/.../MessagingApplication.java` | Bootstrap `@SpringBootApplication`. |
+| `src/main/java/.../event/OrderCreatedEvent.java` | Evento (record inmutable). |
+| `src/main/java/.../service/OrderService.java` | Publica el evento al bus. |
+| `src/main/java/.../listener/NotificationListener.java` | Reacciona al evento con `@EventListener`. |
+| `src/main/java/.../controller/OrderController.java` | `POST /api/orders?customer=X`. |
+| `src/test/.../MessagingApplicationTests.java` | `contextLoads`. |
+| `src/test/.../service/OrderServiceTest.java` | `@SpringBootTest` verifica publish/subscribe end-to-end. |
+| `src/test/.../controller/OrderControllerTest.java` | MockMvc standalone con service mockeado. |
+
+## Artefacto
+`target/mensajeria-1.0.0.jar` (fat JAR ejecutable con Tomcat embebido).

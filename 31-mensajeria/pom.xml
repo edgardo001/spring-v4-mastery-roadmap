@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    pom.xml del módulo 31 - Mensajería (ApplicationEventPublisher in-memory).
+
+    Nota didáctica: aunque el README explica RabbitMQ/Kafka como el "cómo se hace
+    en producción", este módulo demo usa el bus de eventos INTERNO de Spring
+    (ApplicationEventPublisher). Así el alumno entiende el patrón publish/subscribe
+    SIN levantar Docker con brokers externos.
+
+    Coordenadas:
+      - groupId=com.springroadmap
+      - artifactId=mensajeria
+      - version=1.0.0
+      - finalName=mensajeria-1.0.0
+      - Java 21 (Spring Boot 4.1.0 lo exige).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.springroadmap</groupId>
+    <artifactId>mensajeria</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>mensajeria</name>
+    <description>Modulo 31 - Mensajeria con ApplicationEventPublisher</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- Web: expone el endpoint POST /api/orders para disparar el evento. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Test: JUnit 5 + MockMvc + AssertJ. Solo scope test. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>mensajeria-1.0.0</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
