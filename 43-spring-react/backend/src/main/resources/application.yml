@@ -1,0 +1,13 @@
+# Configuracion del backend spring-react (modulo 43).
+# Todo lo demas es autoconfiguracion de Spring Boot.
+server:
+  port: 8080
+
+spring:
+  application:
+    name: spring-react-backend
+
+logging:
+  level:
+    org.springframework.security: INFO
+    com.springroadmap.springreact: DEBUG

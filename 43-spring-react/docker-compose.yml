@@ -1,0 +1,33 @@
+# Modulo 43 - docker compose: levanta backend (Spring) + frontend (nginx).
+#
+# Uso:
+#   docker compose up --build
+#     -> backend en http://localhost:8080
+#     -> frontend en http://localhost:5173
+#
+# Detener: docker compose down
+services:
+  backend:
+    build:
+      context: ./backend
+    image: spring-react-backend:1.0.0
+    container_name: spring-react-backend
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/messages"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+    image: spring-react-frontend:1.0.0
+    container_name: spring-react-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
