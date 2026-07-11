@@ -183,16 +183,78 @@ La Entidad "Padre" que controla todo un grupo de objetos relacionados. Por ejemp
 4. Agrega un método de negocio: `user.changePassword(Password oldPass, Password newPass)`. Valida internamente.
 5. Intenta guardar el `User` usando un simple `JpaRepository` en un Test. Disfruta tener un dominio rico y totalmente asegurado por compilación.
 
+### Antes vs Ahora (Java 8 → Java 21) aplicado a DDD
+
+| Concepto | ANTES (Java 8 — modelo anémico) | AHORA (Java 21 — Aggregate rico) |
+|---|---|---|
+| Value Object | `public class Money { private double amount; setAmount(); getAmount(); }` | `public record Money(BigDecimal amount, String currency) { public Money { validar... } }` |
+| Cambio de estado | `order.setStatus("APPROVED"); order.setApprovedAt(new Date());` | `order.approve();` (encapsula validación + evento) |
+| ID de dominio | `String orderId;` | `public record OrderId(String value) { }` |
+| Domain Event | `class OrderApprovedEvent { getters/setters... }` | `record OrderApprovedEvent(OrderId id, Instant occurredAt)` |
+| Suma segura | `order.total += item.price;` (mutable, `double`) | `total = total.add(item.subtotal());` (inmutable, `BigDecimal`) |
+| Setter público | `order.setTotal(-500);` — corrompe el estado | No existe. Solo constructor validado + métodos de negocio. |
+
+### FAQ del Alumno
+
+- **¿Qué es un Aggregate Root?** Es la entidad "puerta de entrada" a un grupo de objetos que deben ser consistentes juntos. En este módulo, `Order` es el root; `OrderItem` solo se toca a través de `Order`. Nadie modifica un `OrderItem` desde fuera.
+- **¿Por qué el constructor de `Order` es `protected`?** JPA necesita un constructor sin argumentos para reconstruir la entidad al leerla desde la BD. Lo marcamos `protected` para que el código cliente no pueda usarlo — así garantizamos que las órdenes se creen SIEMPRE con el constructor validado.
+- **¿Qué es un Value Object?** Un objeto sin identidad propia que se compara por valor. Dos `Money(100, "USD")` son iguales aunque sean instancias distintas. Es inmutable, y sus invariantes se protegen en el constructor.
+- **¿Por qué usar `BigDecimal` y no `double` para el dinero?** `double` sufre errores de redondeo (0.1 + 0.2 no es exactamente 0.3). En dominios financieros se usa `BigDecimal` para evitar bugs de centavos.
+- **¿Qué es un Domain Event?** Un hecho relevante que YA pasó en el dominio ("OrderApproved"). Es inmutable, se nombra en pasado, y sirve para que otros componentes reaccionen (enviar email, generar factura...).
+- **¿Por qué el `record` no puede ser `@Entity`?** JPA (Hibernate) requiere setters/mutabilidad y un constructor sin args; los `record` son inmutables. Por eso usamos `record` para Value Objects (`Money`, `OrderId`, `OrderApprovedEvent`) pero `class` con constructor `protected` para el Aggregate `Order`.
+- **¿Qué es `@Embeddable`?** Le dice a JPA que la clase NO tiene su propia tabla; sus campos se guardan dentro de la tabla de la entidad que la contiene (o en una tabla auxiliar si es `@ElementCollection`).
+- **¿Por qué `getItems()` devuelve una lista inmutable?** Porque si devolvieras la lista interna, el cliente podría hacer `order.getItems().add(...)` y saltarse las validaciones del aggregate. Devolver `Collections.unmodifiableList` bloquea eso.
+- **¿Qué es "modelo anémico"?** Un modelo donde las entidades son solo bolsas de datos (getters/setters) y toda la lógica vive en el service. Es el anti-patrón que DDD combate.
+- **¿Qué hace `Objects.requireNonNull`?** Lanza `NullPointerException` con un mensaje descriptivo si el argumento es `null`. Es la forma idiomática de validar que un parámetro no sea nulo.
+
+### Ejercicios adicionales
+- Añade un método `Order.cancel()` que solo permita cancelar si el estado es `PENDING`. Registra un `OrderCancelledEvent`.
+- Crea un Value Object `Address(String street, String city, String zip)` y agrégalo como `@Embedded` en `Order`.
+- Usa `ApplicationEventPublisher` de Spring para publicar realmente los Domain Events (en vez de imprimirlos en consola).
+
 ### Cómo ejecutar
 ```bash
+# Compilar y empaquetar (JDK 21 + Maven portables desde la raíz del roadmap):
 cd 42-ddd
-mvn spring-boot:run
+./build.sh          # Git Bash
+# o
+./build.ps1         # PowerShell
+
+# Ejecutar el JAR generado:
+java -jar target/ddd-1.0.0.jar
+
+# O bien, en modo desarrollo:
+../apache-maven-3.9.16/bin/mvn spring-boot:run
+```
+
+Ejemplos de request:
+```bash
+# Crear orden:
+curl -X POST http://localhost:8080/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{"customer":"Juan","items":[{"productName":"Pizza","quantity":2,"unitPrice":10.00,"currency":"USD"}]}'
+
+# Aprobar orden:
+curl -X PUT http://localhost:8080/api/orders/{id}/approve
 ```
 
 ### Archivos del Proyecto
 | Archivo | Propósito |
 |---------|-----------|
-| `domain/Money.java` | Value Object inmutable y testeable sin Spring. |
-| `domain/Order.java` | Aggregate Root con lógica rica, mapeado pragmáticamente con JPA. |
-| `domain/OrderStatus.java` | Enum representativo. |
-| `service/OrderApplicationService.java` | Servicio de Aplicación (Transacciones y Orquestación). |
+| `pom.xml` | Coordenadas Maven (Spring Boot 4.1.0, Java 21, artifactId=ddd). |
+| `build.sh` / `build.ps1` | Scripts portables que usan JDK y Maven de la raíz del roadmap. |
+| `src/main/resources/application.yml` | Configuración H2 en memoria y JPA. |
+| `DddApplication.java` | Punto de entrada Spring Boot. |
+| `order/domain/OrderId.java` | Value Object (record) — identidad de la orden. |
+| `order/domain/Money.java` | Value Object (record) — cantidad + moneda con invariantes. |
+| `order/domain/OrderStatus.java` | Enum de estados (PENDING/APPROVED/CANCELLED). |
+| `order/domain/OrderItem.java` | Value Object (@Embeddable) — línea de la orden. |
+| `order/domain/Order.java` | Aggregate Root (@Entity) con `approve()` y Domain Events. |
+| `order/domain/OrderApprovedEvent.java` | Domain Event (record) publicado al aprobar. |
+| `order/application/OrderService.java` | Application Service — orquesta creación y aprobación. |
+| `order/infrastructure/OrderRepository.java` | JpaRepository del aggregate. |
+| `order/infrastructure/OrderController.java` | REST adapter (POST /api/orders, PUT /{id}/approve). |
+| `src/test/.../DddApplicationTests.java` | `contextLoads` — arranque del contexto. |
+| `src/test/.../OrderTest.java` | Tests unitarios puros del aggregate (approve, doble approve). |
+| `src/test/.../MoneyTest.java` | Tests unitarios puros del Value Object Money. |
+| `src/test/.../OrderControllerTest.java` | MockMvc standalone con service mockeado. |

@@ -1,0 +1,20 @@
+# Configuracion del modulo 42-ddd.
+# Se usa H2 en memoria y ddl-auto=update para regenerar el esquema al arrancar.
+spring:
+  application:
+    name: ddd
+  datasource:
+    url: jdbc:h2:mem:ddddb;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+server:
+  port: 8080
