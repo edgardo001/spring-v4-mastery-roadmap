@@ -1,0 +1,47 @@
+# application.yml del modulo 29 - Configuracion externalizada.
+#
+# En un mundo con Spring Cloud Config Server disponible (Boot 3.x), estas
+# propiedades vendrian desde un repositorio Git remoto y se recargarian con
+# POST /actuator/refresh + @RefreshScope.
+#
+# En este modulo (Boot 4.1.0) demostramos el MISMO patron con:
+#   - @ConfigurationProperties (valores externalizados de application.yml)
+#   - actuator (endpoint refresh expuesto)
+# Cuando exista Spring Cloud compatible con Boot 4, sustituir el 'origen' de
+# estos valores por un config server remoto sera transparente.
+server:
+  port: 8080
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+    include-exception: false
+  server-header: ""
+
+spring:
+  application:
+    name: spring-cloud-config
+
+# Feature flags externalizadas. En una arquitectura real vivirian en
+# el repo Git del Config Server (p.ej. spring-cloud-config.yml).
+app:
+  features:
+    beta-enabled: false
+    max-retries: 3
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # 'refresh' es el endpoint que dispararia la recarga cuando exista
+        # spring-cloud-context. En Boot 4 puro solo esta presente si agregamos
+        # dicho starter; aqui lo declaramos como expectativa documental.
+        include: health,info,refresh
+  endpoint:
+    health:
+      show-details: never
+
+logging:
+  level:
+    root: INFO
+    com.springroadmap: DEBUG

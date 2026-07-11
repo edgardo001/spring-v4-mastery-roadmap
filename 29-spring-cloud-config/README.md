@@ -152,23 +152,82 @@ Si accedes a `http://localhost:8888/ventas/prod` en el navegador, verás cómo e
 4. Crea un `@RestController` con `@Value("${saludo}")`. Arranca primero el servidor, luego el cliente. Visita el endpoint y verifica que lee la configuración remota.
 5. **(Avanzado)** Cambia el saludo en GitHub y haz commit. Luego envía un `POST` a `/actuator/refresh` en tu cliente y verifica que el endpoint muestra el nuevo saludo sin haber reiniciado la app.
 
-### Cómo ejecutar
-```bash
-# Terminal 1: Arrancar Servidor de Configuración
-cd 29-config-server
-mvn spring-boot:run
+---
 
-# Terminal 2: Arrancar Microservicio Cliente
-cd 29-config-client
-mvn spring-boot:run
+## ⚠️ Advertencia — Compatibilidad Spring Cloud + Spring Boot 4.1.0
+
+A la fecha del roadmap (2026-07), **Spring Cloud NO tiene aún un release compatible con Spring Boot 4.1.0**:
+
+- Spring Cloud `2024.x` / `2025.x` → soportan Boot **3.3 / 3.4**.
+- `spring-cloud-config-server`, `spring-cloud-starter-config` y `spring-cloud-context` (donde vive `@RefreshScope`) no publican todavía versión Boot-4-compatible.
+
+**Consecuencia práctica:** en este módulo implementamos una **variante simplificada** que enseña el mismo patrón (*Externalized Configuration*) usando únicamente Spring Boot 4 puro. En cuanto Spring Cloud publique release para Boot 4, la migración es mecánica (agregar `spring-cloud-starter-config` + `bootstrap` YAML + `@RefreshScope`).
+
+---
+
+## Implementación del Módulo (variante simplificada)
+
+### Qué hace este proyecto
+- Externaliza dos feature flags en `application.yml` (`app.features.beta-enabled`, `app.features.max-retries`).
+- Las tipifica con `@ConfigurationProperties(prefix = "app.features")` en `FeatureFlags`.
+- Expone `GET /api/features` con los valores actuales.
+- Deja el endpoint `POST /actuator/refresh` **declarado** en `management.endpoints.web.exposure.include` — cuando exista `spring-cloud-context` para Boot 4, disparará la recarga en caliente de los beans anotados con `@RefreshScope`.
+
+### Antes vs Ahora (tabla resumen del módulo)
+
+| Aspecto | ANTES (hardcoded) | AHORA (externalizado + preparado para Cloud Config) |
+|---------|-------------------|-----------------------------------------------------|
+| Ubicación de valores | Constantes en `.java` | `application.yml` (mañana: Git remoto) |
+| Cambio de valor | Recompilar + redesplegar | Editar YAML + reiniciar (con Cloud Config real: `POST /actuator/refresh`) |
+| Lectura tipada | `Properties.get("...")` + cast manual | `@ConfigurationProperties` con getters tipados |
+| Auditoría | Ninguna (perdido en el binario) | Historial `git log` del repo de configs (con Cloud Config real) |
+| Multi-entorno | `if (env.equals("prod")) ...` en código | `application-prod.yml` / `spring-cloud-config-prod.yml` remoto |
+
+### FAQ del Alumno
+
+- **¿Por qué no usaste `@RefreshScope` directamente?**
+  Vive en `spring-cloud-context`, que aún no tiene release para Boot 4.1.0. Al agregar el starter (cuando exista), basta con anotar `FeatureFlags` o `FeatureController` con `@RefreshScope` y el `POST /actuator/refresh` recreará el bean con los nuevos valores.
+- **¿Por qué `FeatureFlags` no es un `record`?**
+  Porque `@ConfigurationProperties` necesita setters para el <i>rebind</i> tras un refresh. Los records son inmutables → no sirven aquí.
+- **¿Y si quiero probar Spring Cloud Config Server real hoy mismo?**
+  Crea un proyecto separado con Spring Boot 3.4 + `spring-cloud-config-server` (Spring Cloud 2024.x). Este módulo del roadmap se queda en Boot 4 hasta que Cloud publique compatibilidad.
+- **¿Qué pasa si borro `include: refresh` del YAML?**
+  Nada en esta variante (no hay `@RefreshScope` que refrescar). Lo dejamos para que el `application.yml` sea idéntico al que usarías con Cloud Config real.
+- **¿Por qué el test del controller no usa `@WebMvcTest`?**
+  Fue **eliminada en Spring Boot 4.1.0** junto a las demás test-slices. El patrón portable del roadmap es `MockMvcBuilders.standaloneSetup(...)`.
+
+### Cómo ejecutar
+
+```bash
+# Compilar + tests + JAR
+./build.sh          # Git Bash
+# o
+./build.ps1         # PowerShell
+
+# Ejecutar
+java -jar target/spring-cloud-config-1.0.0.jar
+
+# Probar
+curl http://localhost:8080/api/features
+# -> {"betaEnabled":false,"maxRetries":3}
+
+# En cloud config real (cuando exista para Boot 4):
+# 1) Cambiar app.features.beta-enabled=true en el repo Git de configs.
+# 2) curl -X POST http://localhost:8080/actuator/refresh
+# 3) curl http://localhost:8080/api/features → nuevo valor SIN reiniciar.
 ```
 
 ### Archivos del Proyecto
-*Nota: Este módulo idealmente se prueba con dos proyectos Maven distintos.*
+
 | Archivo | Propósito |
 |---------|-----------|
-| **Server:** `ConfigServerApplication.java` | Main class anotada con `@EnableConfigServer`. |
-| **Server:** `application.yml` | URL del repositorio Git. |
-| **Client:** `pom.xml` | Dependencia `spring-cloud-starter-config` y `actuator`. |
-| **Client:** `application.yml` | `spring.application.name` y `spring.config.import`. |
-| **Client:** `SaludoController.java` | Demostración de lectura remota y `@RefreshScope`. |
+| `pom.xml` | Coordenadas Maven, `spring-boot-starter-web` + `-actuator` + `-test`. |
+| `build.sh` / `build.ps1` | Scripts portables con JDK 21 + Maven 3.9.16 locales. |
+| `src/main/resources/application.yml` | Valores externalizados (`app.features.*`) + expone `refresh` en actuator. |
+| `src/main/java/.../CloudConfigApplication.java` | Main + `@ConfigurationPropertiesScan`. |
+| `src/main/java/.../FeatureFlags.java` | POJO tipado enlazado a `app.features.*`. |
+| `src/main/java/.../FeatureController.java` | `GET /api/features` con los valores vigentes. |
+| `src/test/java/.../CloudConfigApplicationTests.java` | `contextLoads` (smoke test). |
+| `src/test/java/.../FeatureControllerTest.java` | MockMvc standalone del endpoint. |
+
+**Artefacto:** `target/spring-cloud-config-1.0.0.jar`
