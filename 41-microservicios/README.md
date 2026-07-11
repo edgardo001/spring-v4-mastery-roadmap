@@ -1,192 +1,226 @@
-## 41 — Arquitectura de Microservicios (Spring Cloud Netflix Eureka)
+## 41 — Arquitectura de Microservicios (DEMO simplificado)
 
-### Propósito
-Comprender las bases de un ecosistema de Microservicios y aprender a implementar el patrón de **Service Discovery (Descubrimiento de Servicios)** utilizando Netflix Eureka, permitiendo que docenas de microservicios se encuentren y se comuniquen entre sí sin hardcodear direcciones IP.
+> ⚠️ **Nota critica de compatibilidad:** Spring Cloud (Eureka + Gateway + Resilience4j)
+> **NO es compatible con Spring Boot 4.1.0** al momento de escribir este modulo. Los
+> releases de Spring Cloud 2024.x/2025.x siguen basados en Spring Boot 3.x
+> (ver `MEMORY.md`, modulos 29 y 30). Por eso este modulo implementa una
+> **simulacion pedagogica in-memory** de Service Discovery + API Gateway, para
+> que aprendas el patron sin depender de librerias no publicadas todavia. Cuando
+> Spring Cloud publique version para Boot 4, este modulo se reescribira con
+> Eureka + Spring Cloud Gateway reales.
+
+### Proposito
+Comprender los tres pilares de un ecosistema de microservicios:
+1. **Service Discovery** (registro central de instancias).
+2. **Client-Side Load Balancing** (Round-Robin sobre las URLs registradas).
+3. **API Gateway** (punto de entrada unico que enruta por nombre de servicio).
 
 ### Problema que resuelve
-En un ecosistema pequeño, si el Servicio A necesita llamar al Servicio B, puedes poner `http://localhost:8081` o `http://192.168.1.5:8080` en tu `application.yml`.
-**El infierno comienza en Producción escalable:**
-- El Servicio B tiene mucho tráfico y Kubernetes levanta 5 copias (Instancias) del Servicio B, cada una con una IP dinámica y aleatoria distinta.
-- ¿A qué IP debería llamar el Servicio A? 
-- Si hardcodeas IPs o URLs, tu sistema colapsará cuando las máquinas se reinicien o se escalen dinámicamente. 
+En un monolito, todo esta en la misma JVM y las llamadas son metodos Java. En
+microservicios, cada modulo es un proceso independiente con su propia IP y su
+propio ciclo de vida. Necesitas resolver:
+- ¿Como encuentra el Servicio A al Servicio B si su IP cambia cada vez que
+  Kubernetes lo reinicia?
+- ¿Como reparto la carga entre las 3 instancias de B sin sobrecargar una sola?
+- ¿Como expongo un unico endpoint al mundo exterior en vez de 20 puertos?
 
-### Cómo lo resuelve
-Introducimos un **Registro Central (El Service Discovery)**, similar a un directorio telefónico amarillo.
-1. Cuando una nueva instancia del Servicio B se enciende (no importa su IP), llama inmediatamente al Directorio Telefónico y dice: *"Hola, soy el Servicio B y estoy en la IP 10.0.0.5"*.
-2. Cuando el Servicio A quiere llamar al Servicio B, no usa una IP. Llama al directorio y pregunta: *"Dame una IP válida del Servicio B"*.
-3. El directorio (Eureka) le devuelve la IP, y además, si hay 5 instancias, las balancea (Load Balancing) para no sobrecargar a una sola máquina.
+### Como lo resuelve
+- **`ServiceRegistry`**: un `Map<nombre, List<URL>>` (in-memory) que actua como
+  Eureka. Los servicios se registran via `POST /registry?name=X&url=Y`.
+- **Round-Robin**: cada consulta a `nextUrl(name)` rota un `AtomicInteger` para
+  devolver una URL distinta y balancear la carga sin sincronizar hilos.
+- **`GatewaySimulator`**: expone `GET /gateway/{service}/**` y proxifica la
+  peticion usando `RestClient` (API moderna que reemplaza `RestTemplate`).
 
-### Por qué aprenderlo
-A pesar de que infraestructuras como Kubernetes (Módulo 48) ofrecen su propio mecanismo de DNS y Service Discovery, dominar Eureka (Client-Side Load Balancing) es fundamental para entender cómo nacieron los microservicios modernos y es ampliamente utilizado en entornos Legacy y Cloud-Native que no dependen exclusivamente de K8s, como migraciones en AWS puro (EC2) o Spring Cloud.
+### Por que aprenderlo
+Aunque en produccion usarias Eureka, Consul o el DNS interno de Kubernetes,
+**la logica es exactamente la misma**: un directorio + un balanceador +
+un proxy. Ver los tres componentes en 3 archivos de Java desmitifica el tema.
 
 ```mermaid
 graph TD
-    subgraph Spring Cloud Netflix
-        E["Eureka Server<br/>(Directorio Telefónico)"]
-    end
-    
-    A["Servicio Ventas<br/>(Eureka Client)"]
-    
-    B1["Servicio Pagos (Instancia 1)<br/>IP: 10.0.0.1"]
-    B2["Servicio Pagos (Instancia 2)<br/>IP: 10.0.0.2"]
-    
-    B1 -->|1. Se registra al iniciar| E
-    B2 -->|1. Se registra al iniciar| E
-    
-    A -->|2. Pregunta: ¿Dónde está Pagos?| E
-    E -->|3. Responde: Usa 10.0.0.2| A
-    
-    A -.->|4. Hace GET a 10.0.0.2| B2
+    Client["Cliente HTTP"]
 
-    style E fill:#fcc419,color:#000
+    subgraph "Modulo 41 (una sola JVM)"
+        GW["GatewaySimulator<br/>GET /gateway/{svc}/**"]
+        REG["ServiceRegistry<br/>Map<nombre, List<URL>>"]
+    end
+
+    B1["Backend Pagos #1<br/>http://host:8081"]
+    B2["Backend Pagos #2<br/>http://host:8082"]
+
+    Client -->|GET /gateway/pagos/facturas| GW
+    GW -->|nextUrl 'pagos'| REG
+    REG -->|Round-Robin| GW
+    GW -.->|proxy via RestClient| B1
+    GW -.->|proxy via RestClient| B2
+
+    style REG fill:#fcc419,color:#000
+    style GW fill:#74c0fc,color:#000
 ```
 
 ---
 
-### Glosario Básico
+### Glosario Basico
 
-#### `Eureka Server`
-La aplicación de Spring Boot (servidor independiente) que funciona única y exclusivamente como el registro/directorio. Tiene un panel de control web.
-
-#### `Eureka Client`
-Cualquier microservicio tuyo (Ventas, Pagos, Inventario) que se va a conectar al Server para decir "Estoy vivo" o para preguntar por otro servicio.
+#### `Service Discovery`
+Patron donde los servicios se registran en un directorio central y otros
+servicios consultan ese directorio para encontrarlos. Evita hardcodear IPs.
 
 #### `Client-Side Load Balancing`
-En lugar de tener un NGINX central balanceando el tráfico (Server-Side), cada Microservicio A tiene una pequeña librería inteligente descargada (el Eureka Client) que tiene la lista de todas las IPs del Servicio B. El Servicio A elige la IP usando Round-Robin en su propia memoria antes de hacer la petición HTTP.
+El cliente (aca el `GatewaySimulator`) tiene la lista de todas las instancias
+del servicio destino y elige una localmente (Round-Robin). No hay balanceador
+externo (NGINX) en el medio.
 
-#### `Heartbeat` (Latido)
-Cada cliente Eureka envía un ping al Servidor cada 30 segundos. Si el Servidor no recibe el ping por 90 segundos, asume que el microservicio murió y lo borra del directorio telefónico.
+#### `API Gateway`
+Un unico punto de entrada al ecosistema. En vez de exponer 20 microservicios en
+20 puertos, expones el gateway y este enruta por path/nombre.
+
+#### `Round-Robin`
+Estrategia de balanceo mas simple: la llamada N va a la instancia `N % total`.
+Todos reciben la misma cantidad de trafico.
+
+#### `RestClient`
+Cliente HTTP fluido de Spring Framework 6+ que reemplaza a `RestTemplate`. En
+Boot 4 es el estandar. Se construye con `RestClient.create()`.
 
 ---
 
 ### Conceptos
 
-#### 1. Levantando el Eureka Server
-- **Qué es** — Es un microservicio Spring Boot vacío, cuya única labor es ser el Directorio.
-- **Código** — (En el proyecto `eureka-server`):
-  ```xml
-  <dependency>
-      <groupId>org.springframework.cloud</groupId>
-      <artifactId>spring-cloud-starter-netflix-eureka-server</artifactId>
-  </dependency>
-  ```
+#### 1. Registro de Servicios (Service Discovery)
+- **Que es** — Un Map en memoria `nombre -> [urls]` protegido con
+  `ConcurrentHashMap` para acceso concurrente.
+- **Por que importa** — Es el nucleo de todo microservicio moderno. Kubernetes,
+  Eureka, Consul y Zookeeper hacen esto mismo con mas features (heartbeat,
+  health checks, TTL).
+- **Codigo:**
   ```java
-  @SpringBootApplication
-  @EnableEurekaServer // Convierte tu app vacía en un Servidor Eureka
-  public class EurekaServerApplication {
-      public static void main(String[] args) {
-          SpringApplication.run(EurekaServerApplication.class, args);
-      }
-  }
+  services.computeIfAbsent(name, k -> new ArrayList<>()).add(url);
   ```
-  ```yaml
-  # application.yml del Server
-  server:
-    port: 8761 # Puerto estándar de Eureka
-  eureka:
-    client:
-      # Un servidor Eureka por defecto intenta registrarse a sí mismo buscando OTROS servidores.
-      # Como estamos en desarrollo (1 solo servidor), lo apagamos para evitar errores en consola.
-      register-with-eureka: false
-      fetch-registry: false
-  ```
+- **Analogia** — El mapa del centro comercial en la entrada.
+- **Casos de uso empresariales** — Marketplaces con auto-scaling, arquitecturas
+  cloud-native, migracion desde monolito con Strangler Fig.
 
-#### 2. Configurando un Microservicio (Eureka Client)
-- **Qué es** — Tu microservicio de negocio real. Solo requiere una dependencia y un nombre.
-- **Código** — (En tu microservicio de Ventas y Pagos):
-  ```xml
-  <dependency>
-      <groupId>org.springframework.cloud</groupId>
-      <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
-  </dependency>
-  ```
-  ```yaml
-  # application.yml del Cliente
-  spring:
-    application:
-      name: servicio-pagos # EL NOMBRE ES VITAL. Así te buscarán en el directorio.
-  server:
-    port: 8081 # Cada servicio en un puerto distinto
-  eureka:
-    client:
-      service-url:
-        defaultZone: http://localhost:8761/eureka/ # Dónde está el servidor
-  ```
-
-#### 3. Llamadas HTTP entre Servicios usando el Nombre
-- **Qué es** — Ahora el Servicio A quiere llamar al Servicio B. Ya no usa localhost, usa el `application.name`.
-- **Código** — Configuración del RestClient con Balanceador de Carga:
+#### 2. Round-Robin con `AtomicInteger`
+- **Que es** — Un contador atomico por servicio que rota el indice de la URL
+  elegida en cada llamada.
+- **Por que importa** — Sin el `Atomic`, dos hilos podrian devolver la misma
+  URL y desbalancear el trafico.
+- **Codigo:**
   ```java
-  @Configuration
-  public class RestConfig {
-  
-      // La anotación @LoadBalanced inyecta un interceptor al cliente HTTP.
-      // Cuando veas un dominio HTTP, buscará ese dominio en Eureka en lugar de ir a Internet.
-      @Bean
-      @LoadBalanced
-      public RestClient.Builder loadBalancedRestClientBuilder() {
-          return RestClient.builder();
-      }
-  }
+  int idx = Math.floorMod(counter.getAndIncrement(), urls.size());
   ```
+- **Analogia** — La cola del banco: cada cliente va al cajero que sigue.
+
+#### 3. Gateway con `RestClient`
+- **Que es** — Un controller que captura `/gateway/{svc}/**`, pregunta al
+  registry por una URL y reenvia la peticion con `RestClient`.
+- **Codigo:**
   ```java
-  @Service
-  public class VentasService {
-      
-      private final RestClient restClient;
-      
-      public VentasService(RestClient.Builder builder) {
-          // NO pones IPs. Pones "http://{nombre-del-servicio}/..."
-          this.restClient = builder.baseUrl("http://servicio-pagos").build();
-      }
-      
-      public String verificarPago() {
-          return restClient.get()
-                  .uri("/api/pagos/estado")
-                  .retrieve()
-                  .body(String.class);
-      }
-  }
+  String body = restClient.get().uri(targetUrl).retrieve().body(String.class);
   ```
+- **Casos de uso empresariales** — Backend-for-Frontend (BFF), edge services,
+  API composition.
 
-#### 4. Edge Cases y Errores Comunes
+---
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| Excepción de red al iniciar cliente | El cliente inicia ANTES que el Eureka Server, y no lo encuentra. | Eureka está diseñado para tolerar esto. El cliente lanzará excepciones rojas, pero seguirá intentando conectarse cada 30 segundos de forma resiliente. Para desarrollo, simplemente levanta el Server primero. |
-| `java.net.UnknownHostException: servicio-pagos` | Usaste `RestClient` o `RestTemplate` puro, olvidando anotar su `@Bean` con `@LoadBalanced`. | Java nativo intentará buscar "servicio-pagos.com" en los DNS de Google. Sin el interceptor `@LoadBalanced`, Spring no sabe que tiene que traducir el nombre usando el directorio local de Eureka. |
-| Lentitud extrema la primera vez | Eureka Client descarga la lista de IPs a su memoria local y la cachea. | El descubrimiento completo puede tardar hasta 3 minutos en ambientes de desarrollo mientras los heartbeats se sincronizan. Sé paciente al arrancar tu cluster de microservicios. |
+### Antes vs Ahora
+
+| Concepto              | ANTES (Java 8 / Spring 4)                                      | AHORA (Java 21 / Spring Boot 4.1) |
+|-----------------------|----------------------------------------------------------------|-----------------------------------|
+| Cliente HTTP          | `new RestTemplate().getForObject(url, String.class)`           | `RestClient.create().get().uri(url).retrieve().body(String.class)` |
+| Map put-if-absent     | `if (m.get(k)==null) m.put(k, new ArrayList<>()); m.get(k).add(v);` | `m.computeIfAbsent(k, x -> new ArrayList<>()).add(v);` |
+| Lista inmutable vacia | `Collections.<String>emptyList()`                              | `List.of()`                       |
+| Mapa literal          | `Map<String,Object> m = new HashMap<>(); m.put("ok", true);`   | `Map.of("ok", true)`              |
+| Contador thread-safe  | `synchronized(this) { i++; }`                                  | `atomicInt.getAndIncrement()`     |
+| Test de controller    | `@WebMvcTest` + `MockMvc` autoinyectado                        | `MockMvcBuilders.standaloneSetup(new Ctrl(deps)).build()` (obligatorio en Boot 4.1.0) |
+
+---
+
+### FAQ del Alumno
+
+- **¿Por que no usamos Eureka directamente?**
+  Porque `spring-cloud-starter-netflix-eureka-server` version 2024.x/2025.x
+  sigue exigiendo Spring Boot 3.x. En Boot 4.1.0 no arranca. Cuando salga la
+  version compatible, este modulo se migrara.
+
+- **¿Esto sirve en produccion?**
+  No. Es una demo pedagogica. Le faltan: heartbeat, health checks, expiracion
+  por TTL, persistencia, replicacion multi-nodo, HTTPS, autenticacion, retries,
+  circuit breakers. En prod se usa Kubernetes DNS, Consul o Eureka de verdad.
+
+- **¿Por que el gateway solo soporta GET?**
+  Por simplicidad. Reenviar POST/PUT con body, headers y multipart requiere
+  bastante mas codigo (leer el `HttpServletRequest.getInputStream()`, propagar
+  content-type, etc.). Spring Cloud Gateway lo hace por ti con `RouteLocator`.
+
+- **¿Que pasa si registro la misma URL dos veces?**
+  Se guarda dos veces y el Round-Robin la elegira mas seguido. Eureka real
+  deduplica por `instanceId`.
+
+- **¿Por que `Math.floorMod` y no `%`?**
+  Cuando el `AtomicInteger` desborda a negativo, `%` puede devolver un indice
+  negativo. `Math.floorMod` siempre devuelve un valor no-negativo.
+
+- **¿Cual es la diferencia entre este gateway y un NGINX?**
+  NGINX es un proxy externo (server-side load balancing) configurado con
+  ficheros. Este es un proxy interno de la JVM que descubre servicios en
+  runtime (client-side).
 
 ---
 
 ### Ejercicios
-1. Crea un proyecto `eureka-server` vacío. Añade `@EnableEurekaServer` y el puerto 8761. Inícialo. Visita `http://localhost:8761` para ver el hermoso dashboard naranja de Eureka.
-2. Crea un proyecto `servicio-empleados` en el puerto 8081 (Client). En su controlador, crea un `GET /empleados` que retorne una lista.
-3. Crea un proyecto `servicio-recursos-humanos` en el puerto 8082 (Client). Añade el Bean `RestClient.Builder` anotado con `@LoadBalanced`.
-4. Haz que RRHH llame al API de empleados usando `http://servicio-empleados/empleados`.
-5. Inicia los 3 proyectos. Ve al Dashboard de Eureka (8761) y asegúrate de que ambos servicios aparecen en la tabla de "Instances currently registered". Prueba el endpoint de RRHH y maravíllate de la magia del enrutamiento dinámico.
 
-### Cómo ejecutar
-Debes abrir 3 terminales distintas y ejecutarlas en este orden:
+1. Agrega un endpoint `DELETE /registry?name=X&url=Y` que desregistre una URL.
+2. Cambia el Round-Robin por una estrategia **aleatoria** usando
+   `ThreadLocalRandom`.
+3. Agrega soporte para POST en el `GatewaySimulator` (lee el body y propagalo).
+4. Agrega un `Scheduled` que cada 30s elimine URLs que no hayan enviado un
+   "heartbeat" (`POST /registry/heartbeat?url=...`) en los ultimos 90s.
+5. Cuando Spring Cloud publique version para Boot 4, migra este modulo a
+   Eureka + Spring Cloud Gateway reales.
 
-```bash
-# Terminal 1:
-cd 41-microservicios/eureka-server
-mvn spring-boot:run
+---
 
-# Terminal 2:
-cd 41-microservicios/servicio-pagos
-mvn spring-boot:run
+### Como ejecutar
 
-# Terminal 3:
-cd 41-microservicios/servicio-ventas
-mvn spring-boot:run
+```powershell
+# PowerShell (Windows)
+./build.ps1
+java -jar target/microservicios-1.0.0.jar
 ```
 
+```bash
+# Git Bash / WSL
+./build.sh
+java -jar target/microservicios-1.0.0.jar
+```
+
+Probar de punta a punta:
+```bash
+# 1) Levantar un backend de prueba en otro puerto (ejemplo: httpbin en 8081).
+# 2) Registrarlo:
+curl -X POST "http://localhost:8080/registry?name=demo&url=http://localhost:8081"
+# 3) Listar:
+curl http://localhost:8080/registry
+# 4) Proxificar por el gateway:
+curl http://localhost:8080/gateway/demo/get
+```
+
+---
+
 ### Archivos del Proyecto
-| Archivo | Propósito |
-|---------|-----------|
-| `eureka-server/pom.xml` | Proyecto servidor Registry. |
-| `servicio-pagos/application.yml` | Cliente registrándose bajo el nombre `servicio-pagos`. |
-| `servicio-ventas/config/RestClientConfig.java` | Inyección de `@LoadBalanced RestClient.Builder`. |
-| `servicio-ventas/service/IntegracionService.java` | Llamada inter-servicio transparente sin hardcodear IPs. |
+
+| Archivo | Rol |
+|---------|-----|
+| `pom.xml` | Coordenadas Maven, Spring Boot 4.1.0, Java 21, `finalName=microservicios-1.0.0`. |
+| `build.ps1` / `build.sh` | Scripts portables con `../jdk-21.0.11+10` + `../apache-maven-3.9.16`. |
+| `src/main/resources/application.yml` | Puerto 8080 y nombre logico de la app. |
+| `MicroserviciosApplication.java` | Bootstrap Spring Boot. |
+| `registry/ServiceRegistry.java` | Directorio in-memory + Round-Robin thread-safe. |
+| `registry/ServiceDiscoveryController.java` | Endpoints REST `POST/GET /registry`. |
+| `gateway/GatewaySimulator.java` | Proxy `GET /gateway/{service}/**` via `RestClient`. |
+| `MicroserviciosApplicationTests.java` | `contextLoads` obligatorio. |
+| `registry/ServiceRegistryTest.java` | Test unitario puro: register + Round-Robin + servicio inexistente. |
+| `registry/ServiceDiscoveryControllerTest.java` | MockMvc **standalone** (obligatorio en Boot 4.1.0). |

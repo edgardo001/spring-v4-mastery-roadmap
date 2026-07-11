@@ -1,0 +1,10 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: microservicios-demo
+
+logging:
+  level:
+    com.springroadmap.microservices: INFO
