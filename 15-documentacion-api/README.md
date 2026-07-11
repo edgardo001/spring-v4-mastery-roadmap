@@ -16,9 +16,6 @@ Sin documentación de API:
 - Una interfaz **Swagger UI** interactiva (`/swagger-ui.html`) donde puedes explorar y probar endpoints directamente desde el navegador.
 - Todo se actualiza automáticamente cuando cambias tu código. La documentación **nunca se desactualiza**.
 
-### Por qué aprenderlo
-En empresas, la documentación de API es el **contrato** entre el backend y el frontend. Es obligatoria para equipos distribuidos, APIs públicas y arquitecturas de microservicios. Swagger UI es la herramienta de documentación más usada en la industria.
-
 ```mermaid
 graph LR
     A["Tus @RestController"] -->|"springdoc-openapi<br/>escanea automáticamente"| B["Especificación OpenAPI 3.1<br/>/v3/api-docs"]
@@ -33,172 +30,173 @@ graph LR
 
 ---
 
-### Glosario Básico
+### Antes vs Ahora
 
-#### `springdoc-openapi`
-Librería que genera automáticamente documentación OpenAPI 3.1 a partir de tus Controllers de Spring.
+#### Antes — Swagger 2 con `springfox` y XML/JSON manual
+```xml
+<!-- pom.xml -->
+<dependency>
+    <groupId>io.springfox</groupId>
+    <artifactId>springfox-swagger2</artifactId>
+    <version>2.9.2</version>
+</dependency>
+<dependency>
+    <groupId>io.springfox</groupId>
+    <artifactId>springfox-swagger-ui</artifactId>
+    <version>2.9.2</version>
+</dependency>
+```
+```java
+// Config manual + spec Swagger 2 (obsoleto)
+@Configuration
+@EnableSwagger2
+public class SwaggerConfig {
+    @Bean
+    public Docket api() {
+        return new Docket(DocumentationType.SWAGGER_2)
+            .select()
+            .apis(RequestHandlerSelectors.basePackage("com.example"))
+            .paths(PathSelectors.any())
+            .build()
+            .apiInfo(new ApiInfoBuilder()
+                .title("Books API")
+                .version("1.0")
+                .build());
+    }
+}
+
+@Api(tags = "Books")
+@RestController
+public class BookController {
+    @ApiOperation(value = "Listar libros")
+    @ApiResponses({
+        @ApiResponse(code = 200, message = "OK")
+    })
+    @GetMapping("/api/books")
+    public List<Book> findAll() { ... }
+}
+```
+Problemas:
+- `springfox` está **sin mantenimiento** desde 2020 y **no soporta Spring Boot 3/4**.
+- Usa la spec **Swagger 2**, no la moderna **OpenAPI 3.1**.
+- Requiere `@EnableSwagger2` y un `Docket` bean con builders anidados.
+- Anotaciones (`@Api`, `@ApiOperation`, `code=`) usan la API vieja `io.swagger.annotations`.
+
+#### Ahora — OpenAPI 3.1 con `springdoc-openapi`
 ```xml
 <dependency>
     <groupId>org.springdoc</groupId>
     <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-    <version>2.8.0</version>
+    <version>2.6.0</version>
 </dependency>
 ```
-
-#### `@Operation`
-Describe un endpoint específico: qué hace, resumen y descripción detallada.
 ```java
-@Operation(summary = "Obtener usuario por ID", description = "Busca un usuario en la BD por su ID único")
-@GetMapping("/{id}")
-public UserResponse getById(@PathVariable Long id) { }
+@Configuration
+public class OpenApiConfig {
+    @Bean
+    public OpenAPI customOpenAPI() {
+        return new OpenAPI().info(new Info()
+            .title("Books API").version("1.0")
+            .description("API de ejemplo del módulo 15"));
+    }
+}
+
+@RestController
+@RequestMapping("/api/books")
+@Tag(name = "Books")
+public class BookController {
+    @Operation(summary = "Listar libros")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "OK")
+    })
+    @GetMapping
+    public List<Book> findAll() { ... }
+}
 ```
-
-#### `@ApiResponse`
-Documenta los posibles códigos de respuesta de un endpoint.
-
-#### `@Schema`
-Documenta los campos de un DTO en la especificación OpenAPI.
-
----
-
-### Conceptos
-
-#### 1. Configuración Básica
-- **Qué es** — Con solo agregar la dependencia, Swagger UI ya está disponible. Para personalizar la información de la API (título, versión, contacto), creas un `@Bean` de `OpenAPI`.
-- **Código** — Configuración personalizada:
-  ```java
-  @Configuration
-  public class OpenApiConfig {
-  
-      @Bean
-      public OpenAPI customOpenAPI() {
-          return new OpenAPI()
-              .info(new Info()
-                  .title("Spring Roadmap API")
-                  .version("1.0.0")
-                  .description("API REST para el roadmap de aprendizaje de Spring Boot 4")
-                  .contact(new Contact()
-                      .name("Edgardo")
-                      .email("edgardo@example.com")
-                      .url("https://github.com/edgardo001"))
-              )
-              .addSecurityItem(new SecurityRequirement().addList("bearerAuth"))
-              .components(new Components()
-                  .addSecuritySchemes("bearerAuth",
-                      new SecurityScheme()
-                          .type(SecurityScheme.Type.HTTP)
-                          .scheme("bearer")
-                          .bearerFormat("JWT")
-                          .description("Ingresa tu JWT token")
-                  )
-              );
-      }
-  }
-  ```
-  ```yaml
-  # application.yml
-  springdoc:
-    api-docs:
-      path: /v3/api-docs
-    swagger-ui:
-      path: /swagger-ui.html
-      operations-sorter: method  # Ordenar por método HTTP
-      tags-sorter: alpha         # Ordenar tags alfabéticamente
-  ```
-
-#### 2. Anotar Controllers con `@Operation` y `@ApiResponse`
-- **Qué es** — Anotaciones que enriquecen la documentación generada, añadiendo descripciones, códigos de respuesta y ejemplos.
-- **Código** — Controller completamente documentado:
-  ```java
-  @RestController
-  @RequestMapping("/api/users")
-  @Tag(name = "Usuarios", description = "Operaciones CRUD para gestión de usuarios")
-  public class UserController {
-  
-      @Operation(
-          summary = "Obtener usuario por ID",
-          description = "Busca un usuario en la base de datos por su identificador único"
-      )
-      @ApiResponses({
-          @ApiResponse(responseCode = "200", description = "Usuario encontrado",
-              content = @Content(schema = @Schema(implementation = UserResponse.class))),
-          @ApiResponse(responseCode = "404", description = "Usuario no encontrado",
-              content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
-      })
-      @GetMapping("/{id}")
-      public UserResponse getById(
-              @Parameter(description = "ID del usuario", example = "1")
-              @PathVariable Long id) {
-          return userMapper.toResponse(userService.findById(id));
-      }
-  
-      @Operation(summary = "Crear nuevo usuario")
-      @ApiResponses({
-          @ApiResponse(responseCode = "201", description = "Usuario creado exitosamente"),
-          @ApiResponse(responseCode = "400", description = "Datos de entrada inválidos"),
-          @ApiResponse(responseCode = "409", description = "El email ya está registrado")
-      })
-      @PostMapping
-      public ResponseEntity<UserResponse> create(
-              @io.swagger.v3.oas.annotations.parameters.RequestBody(
-                  description = "Datos del nuevo usuario",
-                  required = true,
-                  content = @Content(schema = @Schema(implementation = CreateUserRequest.class))
-              )
-              @Valid @RequestBody CreateUserRequest request) {
-          User user = userService.create(userMapper.toEntity(request));
-          return ResponseEntity.status(HttpStatus.CREATED)
-              .body(userMapper.toResponse(user));
-      }
-  }
-  ```
-
-#### 3. Documentar DTOs con `@Schema`
-- **Qué es** — La anotación `@Schema` añade descripciones y ejemplos a los campos de tus DTOs, que luego aparecen en Swagger UI.
-- **Código**:
-  ```java
-  @Schema(description = "Datos para crear un nuevo usuario")
-  public record CreateUserRequest(
-      @Schema(description = "Nombre de usuario único", example = "edgardo", minLength = 3, maxLength = 50)
-      @NotBlank String username,
-      
-      @Schema(description = "Correo electrónico", example = "edgardo@gmail.com")
-      @Email String email,
-      
-      @Schema(description = "Contraseña segura", example = "miPassword123!", minLength = 8)
-      @NotBlank @Size(min = 8) String password
-  ) { }
-  ```
-
-#### 4. Edge Cases y Errores Comunes
-
-| Error | Causa | Solución |
-|-------|-------|----------|
-| Swagger UI no carga | Spring Security bloquea `/swagger-ui/**` | Agregar `.requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()` |
-| Endpoints de Security no aparecen | Los filtros no son Controllers | Los filtros JWT no se documentan automáticamente; documentar manualmente `/login` |
-| Anotaciones duplicadas | Usar `@ApiResponse` de Swagger 2 y OpenAPI 3 mezcladas | Solo usar `io.swagger.v3.oas.annotations` |
+Beneficios:
+- Compatible con **Spring Boot 4** y **Jakarta EE 10**.
+- Genera **OpenAPI 3.1**, la spec estándar actual soportada por todo el ecosistema.
+- Cero configuración: agregar la dependencia ya expone `/swagger-ui.html`.
+- Anotaciones modernas `io.swagger.v3.oas.annotations` (`@Operation`, `@Tag`, `responseCode`).
 
 ---
 
-### Ejercicios
-1. Agrega `springdoc-openapi-starter-webmvc-ui` al `pom.xml` y accede a `http://localhost:8080/swagger-ui.html`.
-2. Crea un `OpenApiConfig` con título, versión y esquema de seguridad JWT.
-3. Documenta un Controller con `@Operation`, `@ApiResponse` y `@Tag`.
-4. Documenta un DTO con `@Schema` incluyendo descripciones y ejemplos.
-5. Prueba ejecutar un endpoint directamente desde Swagger UI usando el botón "Try it out".
+### Estructura
+```
+15-documentacion-api/
+├── pom.xml
+├── build.ps1 / build.sh
+├── src/main/java/com/springroadmap/docs/
+│   ├── DocumentacionApiApplication.java
+│   ├── config/OpenApiConfig.java
+│   ├── controller/BookController.java
+│   └── model/Book.java
+├── src/main/resources/application.yml
+└── src/test/java/com/springroadmap/docs/
+    ├── DocumentacionApiApplicationTests.java     (contextLoads)
+    ├── OpenApiIntegrationTest.java               (TestRestTemplate)
+    └── controller/BookControllerTest.java        (MockMvc standalone)
+```
 
 ### Cómo ejecutar
 ```bash
-cd 15-documentacion-api
-mvn spring-boot:run
-# Abrir: http://localhost:8080/swagger-ui.html
+# Windows
+./build.ps1
+# Linux/macOS
+./build.sh
+
+java -jar target/documentacion-api-1.0.0.jar
+```
+Luego abrir:
+- Swagger UI:  http://localhost:8080/swagger-ui.html
+- OpenAPI JSON: http://localhost:8080/v3/api-docs
+
+### Endpoints
+| Método | Ruta              | Descripción                  |
+|--------|-------------------|------------------------------|
+| GET    | `/api/books`      | Listar todos los libros      |
+| GET    | `/api/books/{id}` | Buscar un libro por ID       |
+| POST   | `/api/books`      | Crear un nuevo libro         |
+| GET    | `/v3/api-docs`    | Spec OpenAPI 3.1 (JSON)      |
+| GET    | `/swagger-ui.html`| Swagger UI                   |
+
+---
+
+### FAQ
+
+**1. ¿Por qué `springdoc` y no `springfox`?**
+`springfox` no se actualiza desde 2020 y no funciona con Spring Boot 3/4. `springdoc-openapi` es el estándar de facto para OpenAPI 3.1 en el ecosistema Spring moderno.
+
+**2. ¿Necesito anotar todos mis Controllers para que aparezcan?**
+No. `springdoc` escanea automáticamente cualquier `@RestController`. Las anotaciones `@Operation`, `@ApiResponse` y `@Tag` solo enriquecen la documentación con textos más claros.
+
+**3. ¿Dónde está `/swagger-ui.html`? Me redirige a `/swagger-ui/index.html`.**
+Es intencional. `/swagger-ui.html` es un alias configurable (`springdoc.swagger-ui.path`) que redirige (302) a la ruta real `/swagger-ui/index.html` servida por WebJars.
+
+**4. ¿Puedo cambiar el path `/v3/api-docs`?**
+Sí, con `springdoc.api-docs.path: /openapi.json` (por ejemplo). Muchas empresas lo mueven a `/api/docs` para uniformizar prefijos.
+
+**5. Si uso Spring Security, ¿por qué Swagger UI da 401?**
+Porque Security bloquea las rutas por defecto. Hay que permitirlas explícitamente:
+```java
+.requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
 ```
 
-### Archivos del Proyecto
-| Archivo | Propósito |
-|---------|-----------|
-| `pom.xml` | Dependencia: `springdoc-openapi-starter-webmvc-ui`. |
-| `config/OpenApiConfig.java` | Personalización del título, versión y seguridad JWT. |
-| `controller/UserController.java` | Controller documentado con `@Operation` y `@ApiResponse`. |
-| `dto/CreateUserRequest.java` | DTO documentado con `@Schema`. |
-| `dto/UserResponse.java` | DTO de respuesta documentado. |
+**6. ¿Puedo generar clientes (SDKs) del frontend automáticamente?**
+Sí. Con la spec JSON `/v3/api-docs` puedes usar `openapi-generator` para generar clientes TypeScript, Java, Python, etc. Es una de las mayores ventajas de OpenAPI.
+
+**7. ¿Diferencia entre `@ApiResponse` (OpenAPI 3) y el viejo de Swagger 2?**
+El moderno vive en `io.swagger.v3.oas.annotations.responses.ApiResponse` y usa `responseCode = "200"` (String). El viejo era `io.swagger.annotations.ApiResponse` con `code = 200` (int). **Nunca los mezcles**: usa siempre `io.swagger.v3.*`.
+
+**8. ¿Por qué el test de integración usa TestRestTemplate y no MockMvc?**
+Porque los endpoints `/v3/api-docs` y `/swagger-ui/index.html` son servidos por filtros/servlets registrados por springdoc que **solo se activan con un servidor real**. MockMvc no los levanta.
+
+**9. ¿Cómo desactivo Swagger UI en producción?**
+```yaml
+springdoc:
+  swagger-ui:
+    enabled: false
+  api-docs:
+    enabled: false
+```
+O usa perfiles: activa el bloque solo cuando `spring.profiles.active=dev`.

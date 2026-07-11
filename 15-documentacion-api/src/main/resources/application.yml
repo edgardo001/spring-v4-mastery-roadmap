@@ -1,0 +1,10 @@
+# Configuración de springdoc-openapi.
+# - api-docs.path: URL donde se sirve la spec OpenAPI 3.1 en JSON.
+# - swagger-ui.path: URL amigable que redirige a /swagger-ui/index.html.
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
