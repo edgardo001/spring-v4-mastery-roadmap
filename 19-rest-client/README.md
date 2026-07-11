@@ -212,3 +212,121 @@ curl http://localhost:8080/api/posts/99999
 | `service/PostIntegrationService.java` | Lógica de integración externa usando `RestClient`. |
 | `controller/PostController.java` | Exposición de los datos externos en tu propia API. |
 | `exception/IntegrationException.java` | Excepción custom lanzada en el `onStatus()` para errores 5xx externos. |
+
+---
+
+## Implementación de este módulo
+
+Este módulo implementa el consumo de la API pública `https://jsonplaceholder.typicode.com/todos/{id}` usando dos enfoques modernos:
+
+1. **`RestClient` fluido** — usado directamente por `TodoService`.
+2. **`@HttpExchange` interface-based** — la interfaz `TodoHttpClient` se registra como bean vía `HttpServiceProxyFactory`.
+
+### Estructura
+
+```
+19-rest-client/
+├── pom.xml                     (Spring Boot 4.1.0 · Java 21 · finalName rest-client-1.0.0)
+├── build.sh / build.ps1
+└── src/
+    ├── main/java/com/springroadmap/restclient/
+    │   ├── RestClientApplication.java
+    │   ├── config/RestClientConfig.java       (Beans RestClient + TodoHttpClient)
+    │   ├── client/TodoHttpClient.java         (@GetExchange declarativo)
+    │   ├── dto/Todo.java                      (record inmutable)
+    │   ├── service/TodoService.java           (RestClient fluido + retry manual)
+    │   └── controller/TodoController.java     (GET /api/todos/{id})
+    ├── main/resources/application.yml         (external.api.url configurable)
+    └── test/java/com/springroadmap/restclient/
+        ├── RestClientApplicationTests.java    (contextLoads)
+        ├── service/TodoServiceTest.java       (MockRestServiceServer)
+        └── controller/TodoControllerTest.java (MockMvc standalone + Mockito)
+```
+
+### Ejecución
+
+```bash
+cd 19-rest-client
+mvn spring-boot:run
+curl http://localhost:8080/api/todos/1
+# {"id":1,"title":"delectus aut autem","completed":false}
+```
+
+O bien:
+
+```bash
+./build.sh          # Linux / macOS / Git Bash
+./build.ps1         # Windows PowerShell
+```
+
+### Tests
+
+```bash
+mvn test
+```
+
+- `RestClientApplicationTests#contextLoads` — smoke test.
+- `TodoServiceTest#fetch_devuelveTodoEsperado` — usa `MockRestServiceServer` bindeando al `RestClient.Builder`, verifica la URL, método y mapeo JSON → `Todo`.
+- `TodoControllerTest#getById_devuelve200YJson` — MockMvc standalone; el `TodoService` está mockeado con Mockito.
+
+---
+
+## Antes vs Ahora — resumen ejecutivo
+
+| Tema | Antes (`RestTemplate`) | Ahora (`RestClient` / `@HttpExchange`) |
+|------|------------------------|----------------------------------------|
+| Estado | **Deprecated** desde Spring 6.1 | Recomendado desde Spring Boot 3.2 |
+| API | Métodos rígidos: `getForObject`, `exchange`, `postForEntity`... | Fluida: `.get().uri().retrieve().body()` |
+| Base URL | Requiere `DefaultUriBuilderFactory` externo | `.baseUrl(...)` directo en el builder |
+| Cliente declarativo | `@FeignClient` (Spring Cloud, dependencia extra) | `@HttpExchange` nativo de Spring Framework |
+| Manejo de errores | `ResponseErrorHandler` global, verboso | `.onStatus(predicate, handler)` inline |
+| Testing | `MockRestServiceServer.createServer(restTemplate)` | `MockRestServiceServer.bindTo(RestClient.Builder)` |
+| Reactivo | No | Alternativa `WebClient` para no-bloqueante |
+
+Ejemplo lado a lado:
+
+```java
+// Antes
+RestTemplate rt = new RestTemplate();
+Todo t = rt.getForObject("https://jsonplaceholder.typicode.com/todos/{id}", Todo.class, 1);
+
+// Ahora (fluido)
+Todo t = restClient.get().uri("/todos/{id}", 1).retrieve().body(Todo.class);
+
+// Ahora (declarativo)
+interface TodoHttpClient {
+    @GetExchange("/todos/{id}") Todo getById(@PathVariable long id);
+}
+Todo t = todoHttpClient.getById(1);
+```
+
+---
+
+## FAQ
+
+**¿Por qué no usar `RestTemplate` si "todavía funciona"?**
+Está marcado como *deprecated for removal*. En proyectos nuevos usar `RestClient` es la línea oficial. Migrar más tarde es fricción innecesaria.
+
+**¿`RestClient` es bloqueante como `RestTemplate`?**
+Sí. Es un cliente **síncrono**. Si necesitas no-bloqueante/reactivo o back-pressure, usa `WebClient`. Para llamadas normales entre microservicios, `RestClient` sobra.
+
+**¿Cuándo elegir `@HttpExchange` en vez de `RestClient` directo?**
+- **`@HttpExchange`** — cuando tienes un contrato estable con muchos endpoints. Reduce código repetitivo, se documenta solo.
+- **`RestClient` directo** — cuando necesitas control fino por request: headers dinámicos, `onStatus` por endpoint, streaming, etc.
+
+**¿`@HttpExchange` requiere Spring Cloud (como Feign)?**
+**No.** Está en `spring-web` desde Spring Framework 6. Solo necesitas construir un `HttpServiceProxyFactory` con un `RestClientAdapter` (o `WebClientAdapter`).
+
+**¿Cómo pruebo un `RestClient` sin arrancar un servidor real?**
+Con `MockRestServiceServer.bindTo(RestClient.Builder)` **antes** de llamar a `.build()`. Ver `TodoServiceTest`. No requiere WireMock ni contenedores.
+
+**¿El retry manual del `TodoService` es correcto para producción?**
+Es una demostración didáctica. En producción usa **Resilience4j** (módulo 30) con `@Retry`, back-off exponencial y jitter, o `RetryTemplate` de Spring.
+
+**¿Por qué `Todo` es un `record` con `@JsonIgnoreProperties(ignoreUnknown = true)`?**
+- `record` → DTO inmutable y conciso (sin Lombok, que no está permitido).
+- `ignoreUnknown` → tolera cambios en la API externa: si añaden `userId` u otros campos, no rompe el mapeo.
+
+**¿Por qué el test del controller es *standalone* y no `@WebMvcTest`?**
+`standaloneSetup` no arranca ApplicationContext; es milisegundos vs segundos. Suficiente cuando solo pruebas mapeo HTTP y no filtros/security.
+

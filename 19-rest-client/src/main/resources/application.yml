@@ -1,0 +1,12 @@
+server:
+  port: 8080
+
+# URL base de la API externa que consumimos. Se inyecta en RestClientConfig
+# via @Value("${external.api.url}") para que sea override-able por perfil o env.
+external:
+  api:
+    url: https://jsonplaceholder.typicode.com
+
+logging:
+  level:
+    com.springroadmap.restclient: DEBUG
