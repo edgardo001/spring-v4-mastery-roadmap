@@ -1,207 +1,172 @@
 ## 37 — Internacionalización (i18n)
 
 ### Propósito
-Aprender a construir aplicaciones y APIs que soporten múltiples idiomas (inglés, español, francés) utilizando el sistema de mensajes centralizado de Spring (`MessageSource`) y la resolución del Locale solicitada por el cliente mediante el header `Accept-Language`.
+Aprender a servir la misma API en varios idiomas usando `MessageSource` +
+`LocaleResolver`, sin duplicar controllers ni endpoints.
 
 ### Problema que resuelve
-Si hardcodeas strings en tu código como `throw new RuntimeException("El usuario no existe")` o devuelves mensajes de validación como `"La contraseña es muy corta"`, tu backend solo podrá ser consumido por usuarios hispanohablantes.
-Si mañana tu empresa decide lanzar la aplicación en Estados Unidos, tendrías que reescribir toda la aplicación o hacer espagueti de código con condicionales `if (idioma == "en") return "User not found"`.
+Si escribes los textos ("Hola", "Not found", "Producto agotado") como String
+literales dentro del código Java, cada nuevo idioma implica reescribir el
+código. Peor: los textos quedan mezclados con la lógica de negocio y no los
+puede editar un traductor.
 
 ### Cómo lo resuelve
-La Internacionalización (abreviada i18n porque hay 18 letras entre la 'i' y la 'n' de *internationalization*) externaliza todos los mensajes legibles por humanos a archivos de propiedades especiales (`messages_en.properties`, `messages_es.properties`). Spring leerá el header `Accept-Language` que envía el navegador del usuario y seleccionará automáticamente el archivo de idioma correcto.
+Spring propone un patrón simple:
+1. Un **`MessageSource`** que carga archivos `.properties` por Locale
+   (`messages_es.properties`, `messages_en.properties`, `messages_fr.properties`).
+2. Un **`LocaleResolver`** que decide qué idioma usar en cada request. En este
+   módulo usamos `AcceptHeaderLocaleResolver` (lee el header HTTP
+   `Accept-Language`, que todos los navegadores envían).
+3. En el controller se declara un parámetro `Locale locale` y Spring lo
+   inyecta automáticamente.
 
 ### Por qué aprenderlo
-Cualquier producto de software global o B2B requiere soporte multi-idioma, no solo para respuestas de la API, sino para correos electrónicos (Módulo 28) y PDFs. Entender la abstracción `Locale` en Java y cómo Spring gestiona los mensajes es esencial para arquitecturas que escalan internacionalmente.
+Toda API pública que se despliegue en varios países lo necesita. Ecommerce,
+banca, SaaS: los mensajes de error y confirmación deben aparecer en el idioma
+del usuario final.
 
 ```mermaid
-graph TD
-    A["Cliente Frontend"] -->|"GET /api/saludo<br/>Header: Accept-Language: fr"| B["Spring Dispatcher"]
-    
-    B --> C["LocaleResolver"]
-    C -->|"Detecta 'fr' (Francés)"| D["Controlador"]
-    
-    D --> E["MessageSource (Gestor de Textos)"]
-    
-    E -.-> F["messages.properties (Default/Inglés)"]
-    E -.-> G["messages_es.properties (Español)"]
-    E -->|"Selecciona este archivo"| H["messages_fr.properties (Francés)"]
-    
-    H -->> E: Retorna "Bonjour!"
-    E -->> D: Retorna "Bonjour!"
-    D -->> A: JSON { "mensaje": "Bonjour!" }
+flowchart LR
+    C["Cliente<br/>Accept-Language: en"] -->|GET /api/greet?name=Ada| S["GreetingController"]
+    S --> R["LocaleResolver<br/>(AcceptHeaderLocaleResolver)"]
+    R -->|Locale.ENGLISH| M["MessageSource"]
+    M -->|lee messages_en.properties| P[("greeting=Hello, {0}!")]
+    P --> S
+    S -->|Hello, Ada!| C
 
-    style C fill:#339af0,color:#fff
-    style H fill:#51cf66,color:#fff
+    style C fill:#FFE082
+    style S fill:#90CAF9
+    style R fill:#A5D6A7
+    style M fill:#CE93D8
+    style P fill:#FFAB91
 ```
 
----
-
 ### Glosario Básico
-
-#### `i18n`
-Abreviatura estándar de la industria para Internacionalización.
-
-#### `Locale`
-Una clase core de Java (`java.util.Locale`) que representa una región geográfica, política o cultural específica. (Ej: `Locale.US`, `Locale.FRENCH`, o un `new Locale("es", "AR")` para Español de Argentina).
-
-#### `MessageSource`
-La interfaz de Spring encargada de resolver mensajes (strings) pasándole una clave (Key) y un Locale.
-
-#### `LocaleResolver`
-El componente de Spring MVC que decide cómo averiguar el idioma del usuario. Puede hacerlo por Cookies, Parámetros en la URL (`?lang=es`) o por el header HTTP estándar (`Accept-Language`).
-
----
+| Término | Explicación |
+|---------|-------------|
+| **Locale** | Objeto Java que representa un idioma+país (ej: `es`, `en_US`, `fr_CA`). |
+| **MessageSource** | Interfaz Spring para resolver una clave (ej. `greeting`) en un texto según el Locale. |
+| **ReloadableResourceBundleMessageSource** | Implementación que recarga .properties cambiados sin reiniciar. |
+| **LocaleResolver** | Estrategia que decide qué Locale usar en cada request HTTP. |
+| **AcceptHeaderLocaleResolver** | LocaleResolver que lee el header HTTP `Accept-Language`. |
+| **Accept-Language** | Header que el navegador envía: `Accept-Language: es-CL,es;q=0.9,en;q=0.8`. |
+| **`{0}`** | Placeholder tipo `MessageFormat` — se rellena con el 1er argumento pasado a `getMessage`. |
 
 ### Conceptos
 
-#### 1. Configurando los Archivos de Mensajes (Resource Bundles)
-- **Qué es** — En lugar de escribir texto en las clases Java, defines "Llaves" (Keys) en archivos de texto dentro de la carpeta `src/main/resources`.
-- **Código** — Estructura de archivos:
-  
-  **`messages.properties`** (Archivo por defecto. Suele ser en Inglés por convención global).
-  ```properties
-  greeting.hello=Hello User!
-  user.not.found=The user with ID {0} does not exist.
-  ```
-
-  **`messages_es.properties`** (Para español en general)
-  ```properties
-  greeting.hello=¡Hola Usuario!
-  user.not.found=El usuario con ID {0} no existe.
-  ```
-
-  **`messages_es_AR.properties`** (Opcional, para dialectos específicos como Español de Argentina)
-  ```properties
-  greeting.hello=¡Che, hola Usuario!
-  ```
-
-#### 2. Configuración en Spring Boot
-- **Qué es** — Por defecto, Spring Boot ya busca archivos que se llamen `messages`, pero necesitamos configurar el `LocaleResolver` para que lea el header HTTP de las peticiones REST.
-- **Código**:
+#### MessageSource
+- **Qué es:** un diccionario centralizado que traduce claves a textos según Locale.
+- **Por qué importa:** desacopla las traducciones del código Java. Un traductor
+  edita `messages_fr.properties` y no toca `.java`.
+- **Código:**
   ```java
-  @Configuration
-  public class I18nConfig {
-  
-      // Usamos el AcceptHeaderLocaleResolver, ideal para APIs REST Stateless
-      @Bean
-      public LocaleResolver localeResolver() {
-          AcceptHeaderLocaleResolver resolver = new AcceptHeaderLocaleResolver();
-          resolver.setDefaultLocale(Locale.US); // Idioma si el cliente no envía el header
-          return resolver;
-      }
-      
-      // Opcional: Para cambiar el "basename" si en lugar de messages.properties
-      // quieres llamarlos i18n/textos.properties
-      @Bean
-      public MessageSource messageSource() {
-          ResourceBundleMessageSource source = new ResourceBundleMessageSource();
-          source.setBasename("messages");
-          source.setDefaultEncoding("UTF-8"); // Evita caracteres raros en acentos y ñ
-          return source;
-      }
+  @Bean
+  public MessageSource messageSource() {
+      ReloadableResourceBundleMessageSource ms = new ReloadableResourceBundleMessageSource();
+      ms.setBasename("classpath:messages/messages");
+      ms.setDefaultEncoding("UTF-8");
+      return ms;
   }
   ```
+- **Analogía:** una guía de frases turística. La clave "saludo" te devuelve
+  "Hola" en la sección española y "Hello" en la inglesa.
+- **Casos empresariales:** mensajes de error API, correos transaccionales,
+  facturas en PDF, notificaciones push.
 
-#### 3. Uso en el Código Java (Respuestas y Excepciones)
-- **Qué es** — Inyectar el `MessageSource` para traducir dinámicamente un string antes de devolverlo en un JSON o una Excepción.
-- **Código**:
-  ```java
-  @RestController
-  @RequestMapping("/api/greetings")
-  public class GreetingController {
-  
-      private final MessageSource messageSource;
-  
-      public GreetingController(MessageSource messageSource) {
-          this.messageSource = messageSource;
-      }
-  
-      @GetMapping
-      public String sayHello(@RequestHeader(name = "Accept-Language", required = false) Locale locale) {
-          // El método getMessage requiere la Llave, un arreglo de parámetros (si hay {0}), y el Locale actual
-          return messageSource.getMessage("greeting.hello", null, locale);
-      }
-      
-      // Forma MÁS MODERNA (Sin pedir el Locale como argumento en cada método)
-      @GetMapping("/advanced")
-      public String sayHelloAdvanced() {
-          // LocaleContextHolder extrae el Locale del hilo de la petición actual (gracias al LocaleResolver)
-          Locale locale = LocaleContextHolder.getLocale();
-          return messageSource.getMessage("greeting.hello", null, locale);
-      }
-  }
-  
-  // Uso en Servicios (Lanzando excepciones traducidas)
-  @Service
-  public class UserService {
-      
-      private final MessageSource messageSource;
-      
-      public void findUser(Long id) {
-          // ... si no existe:
-          String errorMessage = messageSource.getMessage(
-              "user.not.found", 
-              new Object[]{id}, // Reemplaza el {0} en el archivo properties
-              LocaleContextHolder.getLocale()
-          );
-          throw new ResourceNotFoundException(errorMessage);
-      }
-  }
-  ```
+#### LocaleResolver
+- **Qué es:** la estrategia que decide el Locale por request.
+- **Por qué importa:** puedes cambiar la lógica (por header, por sesión, por
+  cookie, por query param) sin tocar el controller.
+- **Estrategias disponibles:**
+  - `AcceptHeaderLocaleResolver` — lee `Accept-Language` (default para APIs).
+  - `SessionLocaleResolver` — guarda el Locale en la sesión HTTP.
+  - `CookieLocaleResolver` — guarda el Locale en una cookie.
+- **Analogía:** el recepcionista de un hotel internacional que decide en qué
+  idioma darte la bienvenida (mirando tu pasaporte, tu reserva, o preguntando).
 
-#### 4. Validaciones Multi-idioma (Bean Validation)
-- **Qué es** — Si usas `@NotBlank` o `@Size` (Módulo 10), puedes internacionalizar los mensajes de error (que por defecto salen en inglés o en el idioma del servidor).
-- **Código**:
-  En el DTO pones la "Llave" entre llaves `{}`:
-  ```java
-  public record UserRequest(
-      @NotBlank(message = "{user.name.required}")
-      String name,
-      
-      @Email(message = "{user.email.invalid}")
-      String email
-  ) {}
-  ```
-  Y en el `messages_es.properties` agregas:
-  ```properties
-  user.name.required=El nombre es un campo obligatorio.
-  user.email.invalid=El formato del correo electrónico no es válido.
-  ```
-  *Magia:* Spring Validation leerá esto automáticamente usando tu configuración de i18n, sin que debas inyectar `MessageSource`.
+### Antes vs Ahora (Java 8 → Java 21)
 
-#### 5. Edge Cases y Errores Comunes
+| Aspecto | ANTES (Java 8) | AHORA (Java 21) |
+|---------|----------------|-----------------|
+| Crear Locale | `new Locale("es")` (deprecated) | `Locale.of("es")` |
+| Cargar bundles | `ResourceBundle.getBundle("messages", locale)` a mano | `@Bean MessageSource` inyectable |
+| Selección de idioma | `if (request.getHeader("Accept-Language").startsWith("es")) ...` | `LocaleResolver` decide y Spring inyecta `Locale` como parámetro |
+| Placeholders | `String.format("Hola, %s!", name)` | `MessageFormat` con `{0}` en `.properties` |
+| Textos | String literales hardcoded en el código | Externalizados en `messages_*.properties` |
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| Los acentos salen como `?` o caracteres extraños | El archivo `.properties` fue guardado en formato ISO-8859-1 (por defecto en Java 8-) o falta configurar el encoding en Spring. | Asegurarse de poner `spring.messages.encoding=UTF-8` en el `application.yml` y que el IDE (IntelliJ/Eclipse) guarde los archivos explícitamente en UTF-8. |
-| Fallo en Correos Asíncronos (`@Async`) | Llamar a `LocaleContextHolder.getLocale()` dentro de un método asíncrono para enviar un correo en otro idioma. | El `Locale` vive en el ThreadLocal de Tomcat. Al saltar a un hilo de background (`@Async`), se pierde y se pone el default. Debes pasar el Locale como parámetro al método asíncrono. |
-| Archivos no encontrados | Escribir los properties como `message_es` (sin la 's' final). | El nombre base predeterminado es `messages`. Por lo tanto debe ser `messages_es.properties`. |
+### FAQ del Alumno
 
----
+- **¿Qué es un `Locale`?** Un objeto que dice "idioma X, país Y". Ej: `es_CL`
+  es "español de Chile".
+- **¿Por qué el archivo se llama `messages_en.properties` y no `en.properties`?**
+  Convención de Java `ResourceBundle`: `<basename>_<idioma>_<pais>.properties`.
+  Nuestro `basename` es `messages`.
+- **¿Qué pasa si el cliente pide `Accept-Language: zh` (chino) y no lo tengo?**
+  Spring cae al `defaultLocale` que definimos en `LocaleResolver` (español en
+  este módulo). Si tampoco existe la clave allí, cae al `messages.properties`
+  genérico.
+- **¿Puedo tener varios idiomas en un mismo request?** No — un request habla
+  un solo idioma. El header `Accept-Language` acepta varios con prioridad
+  (`q=0.9`), pero Spring elige uno.
+- **¿Qué es `{0}` en el `.properties`?** Un placeholder de `MessageFormat`.
+  Cuando llamas `getMessage("greeting", new Object[]{"Ada"}, locale)`, `{0}`
+  se sustituye por `"Ada"`.
+- **¿Por qué UTF-8?** Sin él, caracteres como `ñ`, `é`, `ü` salen corruptos
+  (`??`). Siempre UTF-8.
+- **¿Por qué el header y no una query `?lang=en`?** Ambos son válidos.
+  `Accept-Language` es el estándar HTTP (lo envía el navegador solo). Para
+  overrides manuales del usuario, un `?lang=en` + `SessionLocaleResolver` +
+  `LocaleChangeInterceptor` es el patrón clásico.
 
 ### Ejercicios
-1. Crea los archivos `messages.properties`, `messages_es.properties` y `messages_fr.properties` en `src/main/resources`.
-2. Agrega la propiedad `app.welcome` y ponle "Welcome", "Bienvenido" y "Bienvenue" respectivamente.
-3. Crea un Controlador REST con el endpoint `/api/welcome`. Usa `LocaleContextHolder.getLocale()` y el `MessageSource` para devolver este string.
-4. Usa Postman o cURL para probar el endpoint:
-   - `curl -H "Accept-Language: es" http://localhost:8080/api/welcome`
-   - `curl -H "Accept-Language: fr" http://localhost:8080/api/welcome`
-   - `curl http://localhost:8080/api/welcome` (Debe salir el default).
+1. Agrega `messages_pt.properties` con `greeting=Olá, {0}!` y verifica con
+   `Accept-Language: pt`.
+2. Añade una segunda clave `farewell` en los 3 idiomas y un endpoint
+   `GET /api/bye`.
+3. Cambia el `LocaleResolver` a `SessionLocaleResolver` y agrega un
+   `LocaleChangeInterceptor` para que `?lang=fr` fuerce el idioma.
+4. Escribe un test que valide que un idioma NO soportado (ej. `zh`) cae al
+   default (español).
 
 ### Cómo ejecutar
-```bash
-cd 37-internacionalizacion
-mvn spring-boot:run
 
-# Probar la internacionalización por Headers
-curl -H "Accept-Language: es-ES" http://localhost:8080/api/greetings
+**Windows (PowerShell):**
+```powershell
+.\build.ps1
+java -jar target\internacionalizacion-1.0.0.jar
+```
+
+**Linux / Git Bash:**
+```bash
+./build.sh
+java -jar target/internacionalizacion-1.0.0.jar
+```
+
+**Probar el endpoint:**
+```bash
+curl -H "Accept-Language: en" "http://localhost:8080/api/greet?name=Ada"
+# Hello, Ada!
+
+curl -H "Accept-Language: fr" "http://localhost:8080/api/greet?name=Ada"
+# Bonjour, Ada!
+
+curl "http://localhost:8080/api/greet?name=Ada"
+# Hola, Ada!   (default español)
 ```
 
 ### Archivos del Proyecto
+
 | Archivo | Propósito |
 |---------|-----------|
-| `config/I18nConfig.java` | Configuración del `AcceptHeaderLocaleResolver`. |
-| `resources/messages.properties` | Archivos Resource Bundle con las llaves de traducción (Inglés). |
-| `resources/messages_es.properties` | Traducciones al Español. |
-| `controller/GreetingController.java` | Extracción de traducciones vía `MessageSource` y `LocaleContextHolder`. |
-| `dto/UserRequest.java` | Uso de llaves `{llave}` en anotaciones de validación (Bean Validation). |
+| `pom.xml` | Coordenadas Maven + dependencias web/test. |
+| `build.sh` / `build.ps1` | Scripts que fijan JDK 21 portable y ejecutan `mvn clean verify`. |
+| `src/main/java/.../I18nApplication.java` | Clase principal Spring Boot. |
+| `src/main/java/.../config/I18nConfig.java` | Beans `MessageSource` y `LocaleResolver`. |
+| `src/main/java/.../controller/GreetingController.java` | Endpoint `GET /api/greet`. |
+| `src/main/resources/application.yml` | Configuración de la app. |
+| `src/main/resources/messages/messages.properties` | Fallback (español). |
+| `src/main/resources/messages/messages_es.properties` | Traducciones al español. |
+| `src/main/resources/messages/messages_en.properties` | Traducciones al inglés. |
+| `src/main/resources/messages/messages_fr.properties` | Traducciones al francés. |
+| `src/test/java/.../I18nApplicationTests.java` | `contextLoads`. |
+| `src/test/java/.../controller/GreetingControllerTest.java` | MockMvc standalone: en/es/fr + default + test directo del MessageSource. |
