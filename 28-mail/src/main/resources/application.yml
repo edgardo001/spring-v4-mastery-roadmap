@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: mail
+  mail:
+    host: localhost
+    port: 2525
+    username: ""
+    password: ""
+    properties:
+      mail:
+        smtp:
+          auth: false
+          starttls:
+            enable: false
+  thymeleaf:
+    prefix: classpath:/templates/
+    suffix: .html
+    cache: false
+
+server:
+  port: 8080
+
+logging:
+  level:
+    com.springroadmap.mail: DEBUG
