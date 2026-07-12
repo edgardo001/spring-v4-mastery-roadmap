@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    pom.xml del módulo 55 - Spring Shell (variante fallback).
+
+    NOTA DE COMPATIBILIDAD:
+    Spring Shell 3.4.x fue publicado para Spring Boot 3.4.x. A la fecha de este
+    módulo NO existe una release homologada de spring-shell-starter para
+    Spring Boot 4.1.0 (los transitivos de Spring Framework 6.2 chocan con los
+    de Framework 7 que trae Boot 4).
+
+    Para no romper la promesa de "build reproducible" del roadmap, este módulo
+    implementa una versión SIMPLIFICADA de la idea de Spring Shell usando
+    CommandLineRunner + Scanner (REPL casero). Todos los conceptos didácticos
+    (comandos, prompt, help, parseo) se demuestran igual, y el README documenta
+    la limitación y cómo se migraría cuando spring-shell-starter publique una
+    versión compatible con Boot 4.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.springroadmap</groupId>
+    <artifactId>spring-shell</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>spring-shell</name>
+    <description>Modulo 55 - Spring Shell (variante REPL con CommandLineRunner)</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!--
+            spring-boot-starter (sin web): no queremos Tomcat, solo el
+            contexto de Spring para inyectar los "comandos".
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>spring-shell-1.0.0</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

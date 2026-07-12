@@ -1,0 +1,18 @@
+# LocalStack — emulador local de AWS. Levanta S3, SQS y Secrets Manager en :4566.
+# Uso:
+#   docker compose up -d
+#   aws --endpoint-url=http://localhost:4566 s3 mb s3://demo-bucket
+#   aws --endpoint-url=http://localhost:4566 sqs create-queue --queue-name demo-queue
+version: "3.9"
+services:
+  localstack:
+    image: localstack/localstack:3.8
+    container_name: localstack-53
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3,sqs,secretsmanager
+      - DEBUG=0
+      - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"

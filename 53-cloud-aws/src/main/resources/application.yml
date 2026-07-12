@@ -1,0 +1,23 @@
+# Configuración del módulo 53 — AWS (S3 / SQS / Secrets Manager).
+# NOTA: NO se usa `spring.jackson:` porque Spring Boot 4.1.0 rompe el binder
+# (ver MEMORY.md módulos 38, 44). Los defaults ISO-8601 son correctos.
+server:
+  port: 8080
+
+# Bloque propio (no autoconfig) — se lee vía @Value / @ConfigurationProperties si aplica.
+aws:
+  # Endpoint override: por defecto apunta a LocalStack local.
+  # En producción, dejar vacío para que el SDK use el endpoint real de AWS.
+  endpoint: http://localhost:4566
+  region: us-east-1
+  # Credenciales de PRUEBA (LocalStack acepta cualquier valor).
+  # En producción NO se ponen aquí — se usa DefaultCredentialsProvider (IAM role, ~/.aws/credentials, env vars).
+  access-key: test
+  secret-key: test
+  # Bucket S3 usado por defecto en el controller.
+  s3-bucket: demo-bucket
+
+logging:
+  level:
+    software.amazon.awssdk: WARN
+    com.springroadmap.aws: INFO

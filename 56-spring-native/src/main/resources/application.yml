@@ -1,0 +1,11 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: spring-native
+
+logging:
+  level:
+    root: INFO
+    com.springroadmap.nativeaot: DEBUG

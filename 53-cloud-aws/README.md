@@ -1,252 +1,211 @@
-## 53 — Spring Cloud AWS
+# Módulo 53 — Cloud AWS (S3 + SQS + Secrets Manager)
 
-### Propósito
-Integrar aplicaciones Spring Boot 4.1.0 con los servicios gestionados de **Amazon Web Services** (S3, SQS, SNS, Secrets Manager, RDS) usando el proyecto **Spring Cloud AWS** (`io.awspring.cloud`), evitando escribir código repetitivo del SDK oficial y aprovechando la autoconfiguración, plantillas de alto nivel y las anotaciones idiomáticas de Spring.
+## Propósito
+Integrar una aplicación Spring Boot 4.1.0 con servicios AWS usando el **AWS SDK v2** directamente
+(sin `spring-cloud-aws`, que aún no está publicado para Boot 4.x — mismo problema documentado
+para Spring Cloud Config en el módulo 29).
 
-### Problema que resuelve
-El **AWS SDK for Java v2** oficial es potente pero extremadamente verboso:
-- Debes crear a mano los `S3Client`, `SqsAsyncClient`, `SecretsManagerClient` con builders llenos de credenciales, región, timeouts y reintentos.
-- La serialización JSON de mensajes SQS es manual (payload como `String`).
-- Consumir una cola SQS obliga a implementar un bucle `receiveMessage` + `deleteMessage` con manejo de visibility timeout, backoff y errores.
-- Cargar secretos desde **AWS Secrets Manager** requiere código de arranque personalizado antes de que Spring resuelva `@Value`.
-- Rotar credenciales de RDS a mano suele terminar con contraseñas hardcodeadas en `application.properties` (anti-patrón severo).
+## Problema que resuelve
+Casi toda app "de la nube" necesita:
+- **Object storage** (S3) para archivos que no caben en la base de datos (PDFs, imágenes, backups).
+- **Colas de mensajes** (SQS) para desacoplar productores y consumidores.
+- **Secrets Manager** para NO hardcodear passwords en el repo.
 
-### Cómo lo resuelve
-**Spring Cloud AWS** (mantenido por la comunidad AWSpring bajo el groupId `io.awspring.cloud`) provee starters con autoconfiguración:
-1. Detecta credenciales automáticamente vía la `DefaultCredentialsProviderChain` (variables de entorno → IAM Role de EC2/ECS/EKS → perfil `~/.aws/credentials`).
-2. Expone plantillas de alto nivel: **`S3Template`**, **`SqsTemplate`**, **`SnsTemplate`** que ocultan el boilerplate del SDK.
-3. Provee la anotación **`@SqsListener`** (similar a `@KafkaListener`) para consumir colas de forma declarativa, con conversión JSON automática vía Jackson.
-4. Integra **Secrets Manager** y **Parameter Store** como `PropertySource`, resueltos con `spring.config.import=aws-secretsmanager:` antes de que Spring cree beans.
-5. Autoconfigura el `DataSource` de **RDS** con soporte opcional para autenticación IAM (tokens temporales de 15 minutos).
+Hacer esto sin el SDK oficial es reinventar la rueda; hacerlo con `spring-cloud-aws` no es viable
+hoy en Boot 4. La solución: **AWS SDK v2 + `@Configuration` con `@Bean` para cada cliente**.
 
-### Por qué aprenderlo
-La mayoría de las empresas modernas (bancos, retail, SaaS, startups) despliegan sus microservicios Spring Boot sobre AWS (EC2, ECS, EKS, Lambda). Saber integrar S3 para archivos, SQS para mensajería asincrónica desacoplada, y Secrets Manager para credenciales rotativas es un **skill obligatorio** en cualquier posición Senior de backend Java. Dominar `spring-cloud-aws` significa escribir menos código, más seguro y con mejores prácticas Cloud-Native.
+## Cómo lo resuelve este módulo
+- `AwsConfig` construye `S3Client`, `SqsClient` y `SecretsManagerClient` apuntando a **LocalStack**
+  (`http://localhost:4566`) con credenciales dummy (`test/test`).
+- `S3Service` expone `upload(key, bytes)` y `download(key)`.
+- `SqsService` expone `sendMessage(queueUrl, body)` y `receiveMessages(queueUrl)`.
+- `S3Controller` REST: `POST /api/s3/{key}` sube y `GET /api/s3/{key}` descarga.
+- En producción se elimina `endpointOverride` y `credentialsProvider` — el SDK usa `DefaultCredentialsProvider`
+  (variables de entorno, `~/.aws/credentials`, o IAM role del EC2/ECS/EKS).
+
+## Diagrama
 
 ```mermaid
-graph TD
-    A["Spring Boot 4.1.0 App"] -->|Descubre credenciales| B["IAM Role<br/>(Instance Profile / IRSA)"]
-    A -->|"@Value / @ConfigurationProperties"| C["Secrets Manager<br/>PropertySource"]
-    A -->|S3Template| D[("S3 Bucket<br/>archivos")]
-    A -->|SqsTemplate + @SqsListener| E["SQS Queue<br/>(+ DLQ)"]
-    A -->|JDBC + IAM Auth Token| F[("RDS PostgreSQL")]
+flowchart LR
+    subgraph App["Spring Boot App"]
+        C[S3Controller]:::ctrl --> S3[S3Service]:::svc
+        SqsSvc[SqsService]:::svc
+        S3 --> S3C[S3Client]:::cli
+        SqsSvc --> SqsC[SqsClient]:::cli
+        SM[SecretsManagerClient]:::cli
+    end
 
-    B -.->|STS AssumeRole| G["AWS STS"]
-    E -.->|Mensajes fallidos| H["Dead Letter Queue"]
+    subgraph AWS["LocalStack / AWS"]
+        S3B[(S3 Bucket)]:::aws
+        Q[/SQS Queue/]:::aws
+        Sec[(Secrets)]:::aws
+    end
 
-    style A fill:#6db33f,color:#fff
-    style B fill:#ff9900,color:#000
-    style C fill:#ff9900,color:#000
-    style D fill:#ff9900,color:#000
-    style E fill:#ff9900,color:#000
-    style F fill:#ff9900,color:#000
+    S3C -->|putObject/getObject| S3B
+    SqsC -->|send/receive| Q
+    SM -->|getSecretValue| Sec
+
+    classDef ctrl fill:#dbeafe,stroke:#1e40af,color:#1e3a8a
+    classDef svc  fill:#dcfce7,stroke:#166534,color:#14532d
+    classDef cli  fill:#fef3c7,stroke:#a16207,color:#713f12
+    classDef aws  fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
 ```
 
----
+## Glosario Básico
+| Término | Definición |
+|---|---|
+| **S3** | Simple Storage Service — object storage por clave. Cada objeto es una "caja" identificada por su `key` dentro de un `bucket`. |
+| **SQS** | Simple Queue Service — cola de mensajes gestionada por AWS. |
+| **Secrets Manager** | Servicio que guarda secretos cifrados con rotación automática. |
+| **LocalStack** | Emulador local de AWS (Docker). Escucha en `:4566` y simula S3/SQS/etc. |
+| **Endpoint override** | URL a la que el SDK envía las requests (LocalStack) — en producción se OMITE y el SDK usa el endpoint oficial de AWS. |
+| **DefaultCredentialsProvider** | Cadena de resolución de credenciales del SDK v2: env vars → perfil `~/.aws/credentials` → IAM role. |
+| **Builder pattern** | Estilo `.builder().field(x).build()` que reemplazó los constructores gigantes del SDK v1. |
 
-### Glosario Básico
+## Conceptos
 
-#### `IAM Role`
-Identidad de AWS con permisos (políticas JSON). No tiene contraseña ni claves permanentes: asume credenciales temporales vía STS.
+### S3Client (AWS SDK v2)
+- **Qué es:** el cliente sincrónico para S3.
+- **Por qué importa:** subir/bajar archivos a S3 es la operación de nube más común en cualquier app enterprise.
+- **Código:** ver `AwsConfig.s3Client()` y `S3Service`.
+- **Analogía:** un empleado de bodega que guarda y recupera cajas por etiqueta.
+- **Casos empresariales:** subida de facturas PDF, hosting de imágenes de producto, backups de base de datos, exportes de reportes.
 
-#### `Instance Profile`
-Contenedor que "pega" un IAM Role a una instancia EC2. Cualquier proceso corriendo en esa EC2 obtiene credenciales automáticamente desde el metadata endpoint `169.254.169.254`.
+### SqsClient
+- **Qué es:** cliente para colas SQS.
+- **Por qué importa:** desacopla el productor del consumidor y da retries + dead-letter queues gratis.
+- **Analogía:** buzón compartido — el que deposita no necesita saber quién retira.
+- **Casos empresariales:** procesar pagos de forma asincrónica, notificaciones diferidas, integraciones B2B, event-driven architectures.
 
-#### `IRSA` (IAM Roles for Service Accounts)
-Equivalente al Instance Profile pero para Kubernetes (EKS). Asocia un IAM Role a una `ServiceAccount` de un Pod específico, evitando compartir credenciales entre pods.
+### SecretsManagerClient
+- **Qué es:** cliente para leer secretos cifrados.
+- **Por qué importa:** eliminar contraseñas hardcodeadas y rotarlas automáticamente.
+- **Analogía:** caja fuerte biométrica con log de accesos.
+- **Casos empresariales:** DB passwords, API keys de terceros (Stripe, SendGrid), certificados TLS.
 
-#### `S3Template`
-Bean autoconfigurado de Spring Cloud AWS que envuelve al `S3Client` del SDK. Ofrece métodos como `upload`, `download`, `createSignedGetURL`.
+## Antes vs Ahora
 
-#### `SqsTemplate`
-Bean para producir mensajes hacia SQS. Serializa POJOs a JSON automáticamente con Jackson.
+### AWS SDK v1 (2015) vs SDK v2 (2018+)
+| Aspecto | ANTES (SDK v1) | AHORA (SDK v2) |
+|---|---|---|
+| **Package raíz** | `com.amazonaws.*` | `software.amazon.awssdk.*` |
+| **Construcción** | `AmazonS3ClientBuilder.standard()...build()` | `S3Client.builder()...build()` (uniforme para todos los servicios) |
+| **Requests** | Overloads: `s3.putObject(bucket, key, content)` | Objetos tipados: `PutObjectRequest.builder().bucket(b).key(k).build()` |
+| **Bodies** | `InputStream + ObjectMetadata` | `RequestBody.fromBytes/fromString/fromFile` |
+| **Credenciales** | `BasicAWSCredentials` + `AWSStaticCredentialsProvider` | `AwsBasicCredentials.create(...)` + `StaticCredentialsProvider.create(...)` |
+| **Región** | `Regions.US_EAST_1` (enum) | `Region.US_EAST_1` (constantes tipadas) |
+| **Getters** | `msg.getBody()` | `msg.body()` (estilo record) |
+| **Async** | Cliente async separado (`AmazonS3Async`) con futures crudos | `S3AsyncClient` con `CompletableFuture` nativo |
 
-#### `Secrets Manager`
-Servicio AWS que almacena secretos (contraseñas de BD, API keys), los cifra con KMS y los rota automáticamente cada N días.
+### Spring Cloud AWS vs SDK directo
+| Aspecto | Spring Cloud AWS (starter) | SDK v2 directo (este módulo) |
+|---|---|---|
+| **Autoconfig** | `spring-cloud-aws-starter-s3` → beans automáticos | `@Bean` manuales en `AwsConfig` |
+| **Boot 4 compat** | Aún NO publicado para Boot 4.x | Compatible (es solo el SDK) |
+| **Boilerplate** | Menos | Un poco más |
+| **Control** | Menor (magia de autoconfig) | Total |
 
-#### `VPC Endpoints`
-Túneles privados que permiten a tu app dentro de una VPC hablar con S3/SQS **sin salir a internet**, evitando costes de NAT Gateway y aumentando seguridad.
+### Java 8 vs Java 21 (aplicado al módulo)
+| Aspecto | Java 8 | Java 21 |
+|---|---|---|
+| **Try-with-resources** | Existe | Igual (nada cambia) |
+| **var** | No existe | `var request = PutObjectRequest.builder()...build();` (opcional; en este módulo NO se usa para mayor claridad) |
+| **Records** | No | Útiles para DTOs (no aplica al SDK, sus tipos son builder-based) |
 
----
+## FAQ del Alumno
 
-### Conceptos
+**¿Por qué no usar `spring-cloud-aws`?**
+Porque no está publicado para Spring Boot 4.1.0 al día de hoy (mismo problema que Spring Cloud Config
+en el módulo 29). El SDK v2 directo funciona perfecto y es lo que `spring-cloud-aws` usa por debajo.
 
-#### 1. Autenticación sin credenciales hardcodeadas
-- **Qué es** — La `DefaultCredentialsProviderChain` busca credenciales en este orden: variables de entorno → propiedades del sistema → archivo `~/.aws/credentials` → **IAM Role** de EC2/ECS/EKS. **Nunca** hardcodees `aws.accessKey` en el `.properties`.
-- **Código**:
-  ```xml
-  <dependency>
-      <groupId>io.awspring.cloud</groupId>
-      <artifactId>spring-cloud-aws-starter</artifactId>
-      <version>3.4.0</version>
-  </dependency>
-  ```
-  ```yaml
-  spring:
-    cloud:
-      aws:
-        region:
-          static: us-east-1
-        # NO configures credentials aquí en producción: usa IAM Role
-  ```
+**¿Necesito una cuenta AWS para correr este módulo?**
+No. LocalStack emula S3/SQS/Secrets Manager en tu máquina. `docker compose up -d` y listo.
 
-#### 2. S3: subida, descarga y presigned URLs
-- **Qué es** — `S3Template` sube archivos, los descarga como `InputStream` y genera URLs firmadas temporales para que un cliente descargue directo desde S3 sin pasar por tu backend.
-- **Código**:
-  ```java
-  @Service
-  @Slf4j
-  @RequiredArgsConstructor
-  public class FileStorageService {
+**¿Y para producción, cómo cambio las credenciales?**
+Elimina `.endpointOverride(...)` y `.credentialsProvider(...)` en `AwsConfig`. El SDK usará
+`DefaultCredentialsProvider` que resuelve en este orden:
+1. Variables de entorno `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
+2. Perfil `~/.aws/credentials`.
+3. IAM role del EC2/ECS/EKS/Lambda (lo mejor: nunca ves credenciales en texto).
 
-      private final S3Template s3Template;
+**¿Por qué `forcePathStyle(true)` en el S3Client?**
+LocalStack no resuelve el DNS virtual `bucket.localhost` — necesita path-style
+(`http://localhost:4566/bucket/key`). En producción con AWS real, dejarlo en `false` (default).
 
-      public void uploadInvoice(String key, InputStream body) {
-          s3Template.upload("invoices-bucket", key, body);
-          log.info("Uploaded invoice to S3: {}", key);
-      }
+**¿El test `contextLoads` requiere LocalStack corriendo?**
+No. Los clientes AWS SDK v2 son "lazy": no abren la conexión hasta que se llama a un método.
+El contexto arranca aunque `:4566` esté cerrado.
 
-      public URL generateDownloadLink(String key) {
-          return s3Template.createSignedGetURL(
-              "invoices-bucket", key, Duration.ofMinutes(15));
-      }
-  }
-  ```
+**¿Puedo subir archivos grandes con este `upload`?**
+Sí, hasta unos ~100 MB sin problemas. Para archivos > 100 MB, usar `S3TransferManager` (multipart upload).
 
-#### 3. SQS: `@SqsListener` (consumer) y `SqsTemplate` (producer) con DLQ
-- **Qué es** — Publica y consume mensajes JSON de forma declarativa. Los mensajes que fallan N veces se envían a una **Dead Letter Queue** para inspección manual.
-- **Código**:
-  ```xml
-  <dependency>
-      <groupId>io.awspring.cloud</groupId>
-      <artifactId>spring-cloud-aws-starter-sqs</artifactId>
-      <version>3.4.0</version>
-  </dependency>
-  ```
-  ```java
-  @Service
-  @Slf4j
-  @RequiredArgsConstructor
-  public class OrderProducer {
+**¿Qué versión del SDK usar?**
+La `2.30.0` es estable con JDK 21. Cada 2-3 semanas sale una nueva minor — subir cuando haya un CVE
+o feature necesaria.
 
-      private final SqsTemplate sqsTemplate;
+## Ejercicios
+1. Añadir un endpoint `DELETE /api/s3/{key}` que borre el objeto.
+2. Crear `SecretsService` con `getSecret(String name)` y un endpoint `GET /api/secrets/{name}`.
+3. Escribir un `@Scheduled` que cada 30s haga `receiveMessages` y logee cada mensaje.
+4. Cambiar `S3Service.upload` para recibir `InputStream` en vez de `byte[]` (para archivos grandes).
+5. Configurar dos perfiles (`local` con LocalStack, `prod` sin `endpointOverride`) con `@Profile`.
 
-      public void publish(OrderEvent event) {
-          sqsTemplate.send("orders-queue", event);
-          log.info("Published order {} to SQS", event.orderId());
-      }
-  }
+## Cómo ejecutar
 
-  @Component
-  @Slf4j
-  public class OrderConsumer {
-
-      @SqsListener("orders-queue")
-      public void handle(OrderEvent event) {
-          log.info("Processing order {}", event.orderId());
-          // Si lanza excepción -> reintenta hasta maxReceiveCount, luego DLQ
-      }
-  }
-  ```
-
-#### 4. Secrets Manager como `PropertySource`
-- **Qué es** — Cargas secretos (ej: `db/prod/password`) como propiedades de Spring Boot antes de que se creen los beans, resueltos con `@Value` o `@ConfigurationProperties`.
-- **Código**:
-  ```xml
-  <dependency>
-      <groupId>io.awspring.cloud</groupId>
-      <artifactId>spring-cloud-aws-starter-secrets-manager</artifactId>
-      <version>3.4.0</version>
-  </dependency>
-  ```
-  ```yaml
-  spring:
-    config:
-      import: "aws-secretsmanager:/prod/myapp/db"
-  ```
-  ```java
-  @Service
-  @Slf4j
-  @RequiredArgsConstructor
-  public class DbConnector {
-      @Value("${username}") private String user;
-      @Value("${password}") private String pass;
-  }
-  ```
-
-#### 5. RDS con autenticación IAM o rotación de Secrets
-- **Qué es** — En lugar de una contraseña estática, RDS puede aceptar un **token IAM temporal** (válido 15 min). Alternativamente, Secrets Manager rota la contraseña cada N días y la app la relee automáticamente.
-- **Código** (IAM Auth):
-  ```yaml
-  spring:
-    datasource:
-      url: jdbc:postgresql://mydb.xyz.us-east-1.rds.amazonaws.com:5432/app?sslmode=require
-      username: iam_app_user
-      # password se genera con el SDK: RdsUtilities.generateAuthenticationToken(...)
-  ```
-  ```java
-  @Bean
-  DataSource dataSource(RdsUtilities rds) {
-      String token = rds.generateAuthenticationToken(builder -> builder
-          .hostname("mydb.xyz.us-east-1.rds.amazonaws.com")
-          .port(5432).username("iam_app_user"));
-      // Configurar HikariCP con el token como password
-      // ...
-  }
-  ```
-
----
-
-### Edge Cases y Errores Comunes
-
-| Error | Causa | Solución |
-|-------|-------|----------|
-| `SdkClientException: Unable to load region` | No definiste `spring.cloud.aws.region.static` ni la variable `AWS_REGION`. | Setear la región explícitamente en `application.yml` o vía env `AWS_REGION=us-east-1`. |
-| Credenciales expiradas (`ExpiredTokenException`) | El IAM Role rotó las credenciales STS pero tu cliente cacheó las antiguas. | Usar `DefaultCredentialsProvider` (refresca solo). No cachear el `S3Client` fuera del contenedor Spring. |
-| DLQ nunca recibe mensajes fallidos | Olvidaste asociar la Redrive Policy en la cola SQS principal, o `maxReceiveCount` es demasiado alto. | Configurar en la cola: `RedrivePolicy` con `deadLetterTargetArn` y `maxReceiveCount: 3`. |
-| Timeouts silenciosos sin reintentos | El SDK por defecto reintenta 3 veces, pero tu `apiCallTimeout` es menor que `apiCallAttemptTimeout * 3`. | Ajustar `spring.cloud.aws.sqs.listener.acknowledgement-mode` y timeouts del `ClientOverrideConfiguration`. |
-| Factura de S3 explota por `ListObjectsV2` | Cada `list()` en un bucket con 10M objetos cuesta y satura. | Nunca listes buckets grandes: usa prefijos (`prefix/`), S3 Inventory, o índices en DynamoDB. |
-
----
-
-### Ejercicios
-1. Crea un Spring Boot 4.1.0 con `spring-cloud-aws-starter-s3` y sube un archivo local a un bucket usando `S3Template`. Genera un presigned URL válido por 5 minutos.
-2. Levanta **LocalStack** en Docker (`localstack/localstack`) y configura el endpoint override para que S3 apunte a `http://localhost:4566`. Repite el ejercicio 1 sin AWS real.
-3. Crea dos colas SQS (`orders-queue` + `orders-dlq`) con RedrivePolicy y `maxReceiveCount=3`. Implementa un `@SqsListener` que falle si el `orderId` es negativo, y verifica que el mensaje termina en la DLQ.
-4. Almacena un secreto `/dev/myapp/api-key` en Secrets Manager (o LocalStack) y léelo con `@Value` en un controller `/whoami`.
-5. Publica un `OrderEvent` con `SqsTemplate` que un consumidor deserialice a POJO usando Jackson (verifica que `contentType=application/json` viaja en los atributos del mensaje).
-
-### Cómo ejecutar
-Para desarrollo local, usa **LocalStack** (emulador de AWS gratis):
+### 1) Levantar LocalStack (opcional — solo si vas a hacer requests reales)
 ```bash
-docker run --rm -it -p 4566:4566 localstack/localstack
-
-# Crear recursos (aws-cli apuntando a LocalStack)
-aws --endpoint-url=http://localhost:4566 s3 mb s3://invoices-bucket
-aws --endpoint-url=http://localhost:4566 sqs create-queue --queue-name orders-queue
-
-cd 53-cloud-aws
-mvn spring-boot:run
-```
-```yaml
-# application-local.yml — apuntando a LocalStack
-spring:
-  cloud:
-    aws:
-      region.static: us-east-1
-      credentials:
-        access-key: test
-        secret-key: test
-      s3.endpoint: http://localhost:4566
-      sqs.endpoint: http://localhost:4566
+docker compose up -d
+# Crear el bucket que usa el controller
+docker exec -it localstack-53 awslocal s3 mb s3://demo-bucket
 ```
 
-### Archivos del Proyecto
+### 2) Build
+```bash
+# Git Bash
+./build.sh
+# PowerShell
+.\build.ps1
+```
+
+### 3) Ejecutar
+```bash
+java -jar target/cloud-aws-1.0.0.jar
+# o para desarrollo:
+../apache-maven-3.9.16/bin/mvn spring-boot:run
+```
+
+### 4) Probar
+```bash
+# Subir bytes
+curl -X POST http://localhost:8080/api/s3/hola.txt \
+     -H "Content-Type: application/octet-stream" \
+     --data-binary "hola desde curl"
+
+# Descargar
+curl http://localhost:8080/api/s3/hola.txt
+```
+
+### 5) Correr los tests
+```bash
+../apache-maven-3.9.16/bin/mvn test
+```
+
+## Archivos del Proyecto
+
 | Archivo | Propósito |
-|---------|-----------|
-| `pom.xml` | Dependencias `io.awspring.cloud:spring-cloud-aws-starter-s3/-sqs/-secrets-manager` v3.4.0. |
-| `application.yml` | Región AWS, endpoints (LocalStack en dev), configuración de listeners SQS. |
-| `service/FileStorageService.java` | Subida/descarga a S3 y generación de presigned URLs con `S3Template`. |
-| `service/OrderProducer.java` | Publicación de eventos JSON a SQS con `SqsTemplate`. |
-| `listener/OrderConsumer.java` | Consumidor declarativo con `@SqsListener` y manejo hacia DLQ. |
-| `config/AwsSecretsConfig.java` | Lectura de secretos desde Secrets Manager vía `spring.config.import`. |
-| `config/RdsIamAuthConfig.java` | `DataSource` con token IAM temporal para RDS. |
+|---|---|
+| `pom.xml` | Coordenadas Maven + AWS SDK v2 (s3/sqs/secretsmanager 2.30.0). |
+| `build.sh` / `build.ps1` | Build con toolchain portable (JDK 21 + Maven 3.9.16). |
+| `docker-compose.yml` | LocalStack con S3/SQS/SecretsManager en :4566. |
+| `src/main/resources/application.yml` | Config AWS (endpoint, región, credenciales de prueba, bucket). Sin `spring.jackson:` (rompe Boot 4). |
+| `src/main/java/.../CloudAwsApplication.java` | Main con `@SpringBootApplication`. |
+| `src/main/java/.../config/AwsConfig.java` | `@Bean` para S3Client / SqsClient / SecretsManagerClient. |
+| `src/main/java/.../service/S3Service.java` | `upload(key,bytes)` + `download(key)`. |
+| `src/main/java/.../service/SqsService.java` | `sendMessage(url,body)` + `receiveMessages(url)`. |
+| `src/main/java/.../controller/S3Controller.java` | REST `POST /api/s3/{key}` + `GET /api/s3/{key}`. |
+| `src/test/java/.../CloudAwsApplicationTests.java` | `contextLoads` — verifica que los 3 beans AWS se construyen. |
+| `src/test/java/.../service/S3ServiceTest.java` | Unitario: mockea `S3Client`, verifica que `upload` llama `putObject`. |
+| `src/test/java/.../controller/S3ControllerTest.java` | MockMvc standalone con `S3Service` mockeado. |
+
+## Artefacto
+`target/cloud-aws-1.0.0.jar`

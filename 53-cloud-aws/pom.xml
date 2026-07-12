@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- BOM: Spring Boot 4.1.0 gestiona versiones de todas las dependencias hijas. -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <!-- Coordenadas Maven consistentes con el resto del roadmap. -->
+    <groupId>com.springroadmap</groupId>
+    <artifactId>cloud-aws</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>53-cloud-aws</name>
+    <description>Módulo 53 — Integración con AWS (S3, SQS, Secrets Manager) usando AWS SDK v2</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- AWS SDK v2: última versión estable con JDK 21 al momento del roadmap.
+             NOTA: se usa el SDK directamente porque spring-cloud-aws NO está publicado
+             para Spring Boot 4.1.0 (mismo problema que módulo 29 con Spring Cloud Config). -->
+        <awssdk.version>2.30.0</awssdk.version>
+    </properties>
+
+    <dependencies>
+        <!-- Web: expone /api/s3/{key} para upload/download. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- AWS SDK v2 — S3 (object storage). -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>${awssdk.version}</version>
+        </dependency>
+
+        <!-- AWS SDK v2 — SQS (colas de mensajes). -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sqs</artifactId>
+            <version>${awssdk.version}</version>
+        </dependency>
+
+        <!-- AWS SDK v2 — Secrets Manager (credenciales/DB passwords cifrados). -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>secretsmanager</artifactId>
+            <version>${awssdk.version}</version>
+        </dependency>
+
+        <!-- Test: JUnit 5 + Spring Test + MockMvc + Mockito + AssertJ. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!-- finalName estable para que "java -jar target/cloud-aws-1.0.0.jar" siempre funcione. -->
+        <finalName>cloud-aws-1.0.0</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

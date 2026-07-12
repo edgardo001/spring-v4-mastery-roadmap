@@ -1,0 +1,16 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: ai-integration
+
+llm:
+  # Se lee de la variable de entorno OPENAI_API_KEY. Vacia por defecto.
+  api-key: ${OPENAI_API_KEY:}
+  base-url: https://api.openai.com/v1
+  model: gpt-4o-mini
+
+logging:
+  level:
+    com.springroadmap.ai: INFO

@@ -1,0 +1,16 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: spring-ai
+
+springai:
+  simulator:
+    default-system: "Eres un asistente util, breve y en espanol."
+    default-model: "gpt-4o-mini-sim"
+    temperature: 0.7
+
+logging:
+  level:
+    com.springroadmap.springai: INFO

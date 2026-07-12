@@ -200,3 +200,79 @@ mvn spring-boot:run
 | `config/AppRuntimeHints.java` | `RuntimeHintsRegistrar` que declara reflection y recursos para GraalVM. |
 | `application.yml` | Configuración base + perfil `native`. |
 | `src/test/java/.../NativeSmokeTest.java` | Test ejecutado contra el binario nativo (`mvn -PnativeTest test`). |
+
+---
+
+### Antes vs Ahora
+
+| Aspecto | Antes (JVM tradicional) | Ahora (Spring Native / GraalVM AOT) |
+|---------|-------------------------|-------------------------------------|
+| **Arranque** | 5-10s de warm-up (carga de clases, JIT, escaneo de beans) | **<100ms** — el binario ya trae el contexto resuelto en build time |
+| **Memoria** | 300MB+ RSS por instancia trivial | **<80MB** RSS — sin metaspace, sin JIT, sin class loaders |
+| **Cold start serverless** | 8s en AWS Lambda -> penaliza SLA | 100ms -> viable sin provisioned concurrency |
+| **Compilacion** | `javac` + JIT en runtime | **Spring AOT** genera codigo Java + `RuntimeHints` -> **GraalVM native-image** compila en build time (closed-world) |
+| **Reflection dinamica** | `Class.forName()` libre en runtime | Debe declararse con `RuntimeHintsRegistrar` o tracing agent |
+| **Build time** | ~20s `mvn package` | 5-15min `mvn -Pnative native:compile` (4-8GB RAM peak) |
+| **Throughput sostenido** | JVM caliente gana 10-20% en benchmarks largos | Binario nativo puede ser algo mas lento en regimen, pero constante |
+| **Debug** | Attach de IDE, hot reload, JMX | Limitado: `gdb`, sin hot reload |
+
+### Ejecucion — build normal (JAR)
+
+Los scripts portables solo hacen `mvn clean verify` (build JVM tradicional):
+
+```bash
+# Linux / macOS / Git Bash
+./build.sh
+
+# Windows PowerShell
+./build.ps1
+
+# Artefacto resultante
+java -jar target/spring-native-1.0.0.jar
+curl http://localhost:8080/api/hello
+# -> Hello from AOT/Native
+```
+
+### Ejecucion — build nativo (opcional)
+
+**Requisitos**: GraalVM 21+ instalado (`sdk install java 21.0.2-graal`) o Docker.
+
+```bash
+# Opcion A — Compilacion nativa local (requiere GraalVM 21+ y native-image)
+mvn -Pnative native:compile
+./target/hello-native
+# Arranque esperado: <100ms
+
+# Opcion B — Via Buildpacks (sin GraalVM local, requiere Docker)
+mvn -Pnative spring-boot:build-image
+docker run --rm -p 8080:8080 docker.io/library/spring-native:1.0.0
+```
+
+---
+
+### FAQ
+
+**1. Necesito instalar GraalVM para que compile el modulo?**
+No. Los scripts `build.sh` / `build.ps1` solo producen el JAR (`mvn clean verify`). GraalVM solo es necesario si ejecutas `mvn -Pnative native:compile`.
+
+**2. Por que el package se llama `com.springroadmap.nativeaot` y no `com.springroadmap.native`?**
+`native` es una palabra reservada de Java y no puede usarse como identificador de package. Usamos `nativeaot` para reflejar el proposito (AOT nativo).
+
+**3. Por que `RuntimeHintsRegistrar` si mi controller no usa reflection?**
+Es una **demostracion** del mecanismo. El `Message` record esta registrado con `MemberCategory.INVOKE_PUBLIC_METHODS` para que si en el futuro se serializa via Jackson en el binario nativo, no lance `NoSuchMethodException`. Sin esto, cualquier tipo accedido por reflection en runtime queda invisible al `native-image`.
+
+**4. Cuanto tarda el build nativo?**
+Entre 5 y 15 minutos, con picos de 4 a 8 GB de RAM. En hardware modesto puede fallar por OOM: usa Buildpacks (Docker) que aisla el consumo.
+
+**5. Puedo usar `Class.forName("com.plugin.X")` en runtime?**
+No con configuracion por defecto. GraalVM aplica **closed-world assumption**: todo lo que existira en runtime debe conocerse en build time. Debes declararlo en `RuntimeHints` o el tracing agent.
+
+**6. El binario nativo es mas rapido en todo?**
+No. Gana en **arranque** y **memoria**. En **throughput sostenido** una JVM caliente con JIT puede ser 10-20% mas rapida. Para batches pesados de larga duracion, JVM sigue siendo mejor.
+
+**7. Como se ejecutan los tests contra el binario nativo?**
+Con `mvn -PnativeTest test` (perfil adicional del `native-maven-plugin`). No incluido en este modulo minimo; el modulo cubre solo el ciclo build + JAR + hints demostrativos.
+
+**8. Que pasa con Lombok en el build nativo?**
+Ningun problema: Lombok procesa anotaciones en tiempo de compilacion Java (antes del AOT). El bytecode resultante ya no depende de Lombok. En este modulo, por convencion, **no** usamos Lombok.
+

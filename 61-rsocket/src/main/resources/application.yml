@@ -1,0 +1,19 @@
+# application.yml - Configuracion del modulo 61-rsocket
+# Servidor RSocket en TCP puerto 7000 + servidor HTTP (WebFlux/Netty) en 8080 para el bridge.
+spring:
+  application:
+    name: rsocket-demo
+  rsocket:
+    server:
+      # Puerto TCP donde escucha el servidor RSocket. El cliente se conecta con rsc/RSocketRequester.
+      port: 7000
+      # Transporte TCP. Alternativas: 'websocket' (compartiendo puerto con Netty en /rsocket).
+      transport: tcp
+
+server:
+  # Puerto HTTP del bridge REST -> RSocket.
+  port: 8080
+
+logging:
+  level:
+    com.springroadmap.rsocket: INFO
