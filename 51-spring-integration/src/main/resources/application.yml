@@ -1,0 +1,18 @@
+# ============================================================================
+# application.yml - Módulo 51 Spring Integration
+# ----------------------------------------------------------------------------
+# IMPORTANTE (Boot 4.1.0):
+#   NO configurar el bloque `spring.jackson:` porque rompe JacksonAutoConfiguration.
+#   Los defaults (ISO-8601 para fechas) son correctos.
+# ============================================================================
+server:
+  port: 8080
+
+spring:
+  application:
+    name: spring-integration
+
+logging:
+  level:
+    org.springframework.integration: INFO
+    com.springroadmap.integration: DEBUG

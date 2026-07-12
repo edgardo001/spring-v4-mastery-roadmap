@@ -286,3 +286,252 @@ curl -N http://localhost:8080/api/products
 | `config/WebClientConfig.java` | Bean `WebClient` con `baseUrl` y headers por defecto. |
 | `config/RouterConfig.java` | Ejemplo de `RouterFunction` (estilo funcional). |
 | `db/migration/V1__init.sql` | Migración Flyway para tabla `products`. |
+
+---
+
+## Implementación del módulo (esta carpeta)
+
+Este módulo entrega una implementación mínima, compilable y testeable de un CRUD reactivo con **WebFlux + R2DBC + H2 en memoria**, siguiendo las convenciones del roadmap (Boot 4.1.0, Java 21, Maven portable, `groupId=com.springroadmap`, `artifactId=reactive`).
+
+### Archivos entregados
+
+| Archivo | Propósito |
+|---------|-----------|
+| `pom.xml` | `spring-boot-starter-webflux` + `spring-boot-starter-data-r2dbc` + `io.r2dbc:r2dbc-h2` (runtime) + `h2` (runtime) + `spring-boot-starter-test` + `reactor-test`. **NO incluye `spring-boot-starter-web`**. `finalName=reactive-1.0.0`. |
+| `build.sh` / `build.ps1` | Toolchain portable (`../jdk-21.0.11+10` + `../apache-maven-3.9.16`). |
+| `src/main/resources/application.yml` | `spring.r2dbc.url=r2dbc:h2:mem:///testdb;DB_CLOSE_DELAY=-1`, `spring.r2dbc.username=sa`, `spring.sql.init.mode=always`. Sin `spring.jackson:`. |
+| `src/main/resources/schema.sql` | `CREATE TABLE items(id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100), price DECIMAL(10,2))`. |
+| `domain/Item.java` | POJO `@Table("items")` con constructor injection. |
+| `repository/ItemRepository.java` | `extends ReactiveCrudRepository<Item, Long>`. |
+| `web/ItemHandler.java` | Handler funcional: `findAll`, `findById` (404 si no existe vía `switchIfEmpty`), `create`. Cada método retorna `Mono<ServerResponse>`. |
+| `web/ItemRoutes.java` | `@Bean RouterFunction<ServerResponse>` con `GET/POST /api/items` y `GET /api/items/{id}`. |
+| `ReactiveApplicationTests` | `contextLoads` — verifica que el contexto reactivo arranca. |
+| `ItemRoutesTest` | `@SpringBootTest(webEnvironment=RANDOM_PORT)` + `@Autowired WebTestClient`. Cubre GET-list, POST con `.expectBody(Item.class)`, GET-404 y round-trip POST→GET. |
+
+### Cómo compilar
+```powershell
+cd 59-reactive
+.\build.ps1
+```
+o en bash:
+```bash
+cd 59-reactive
+./build.sh
+```
+Artefacto: `target/reactive-1.0.0.jar`.
+
+---
+
+## Antes vs Ahora
+
+### Antes — Spring MVC + JDBC (bloqueante)
+
+```java
+// Controller MVC clasico
+@RestController
+@RequestMapping("/api/items")
+public class ItemController {
+    private final JdbcTemplate jdbc;
+    public ItemController(JdbcTemplate jdbc) { this.jdbc = jdbc; }
+
+    @GetMapping
+    public List<Item> findAll() {
+        // El hilo de Tomcat queda BLOQUEADO en la llamada JDBC
+        return jdbc.query("SELECT * FROM items", (rs, i) ->
+            new Item(rs.getLong("id"), rs.getString("name"), rs.getBigDecimal("price")));
+    }
+}
+```
+
+- Modelo **thread-per-request**: cada petición ocupa un hilo del pool de Tomcat (200 por defecto).
+- JDBC bloquea al hilo mientras el driver espera respuesta del socket TCP a la BD.
+- Con 5 000 conexiones concurrentes, 4 800 quedan encoladas o rechazadas.
+- Latencia añadida por *context switching* al usar cientos de hilos.
+
+### Ahora — Spring WebFlux + R2DBC (no bloqueante)
+
+```java
+// Handler funcional reactivo
+@Component
+public class ItemHandler {
+    private final ItemRepository repository;
+    public ItemHandler(ItemRepository repository) { this.repository = repository; }
+
+    public Mono<ServerResponse> findAll(ServerRequest req) {
+        return ServerResponse.ok()
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(repository.findAll(), Item.class); // Flux<Item>, no bloquea
+    }
+}
+```
+
+- Reactor Netty usa **event loop** (≈ `2 × cores` hilos) que multiplexa miles de conexiones.
+- R2DBC habla con la BD por sockets **no bloqueantes**: mientras espera el `ResultSet`, el hilo atiende otras peticiones.
+- Backpressure integrado: el `Subscriber` pide `request(n)` → nunca se satura la memoria.
+- Con los mismos recursos, atiende ~10× más conexiones simultáneas que la variante MVC+JDBC.
+
+| Aspecto | Antes (MVC + JDBC) | Ahora (WebFlux + R2DBC) |
+|---------|--------------------|--------------------------|
+| Servidor | Tomcat (thread-per-request) | Reactor Netty (event loop) |
+| Tipos de retorno | `List<T>`, `T` | `Mono<T>`, `Flux<T>` |
+| Acceso a BD | JDBC bloqueante | R2DBC no bloqueante |
+| Cliente HTTP | `RestClient`, `RestTemplate` | `WebClient` |
+| Concurrencia | Limitada por tamaño del pool | Limitada por memoria/sockets |
+| Testing HTTP | `TestRestTemplate` / MockMvc | **`WebTestClient`** |
+| Debugging | Stack traces tradicionales | Cadenas reactivas + `checkpoint()` |
+
+---
+
+## Advertencia CRÍTICA — Nunca mezclar `starter-web` y `starter-webflux`
+
+**Regla dura del roadmap y del propio Spring Boot:**
+
+Si en tu `pom.xml` aparecen **ambos** starters:
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-webflux</artifactId>
+</dependency>
+```
+
+entonces Spring Boot detecta que `spring-boot-starter-web` está en el classpath y **arranca Tomcat (bloqueante) por defecto**, ignorando Netty. Habrás perdido toda la ventaja reactiva y además tendrás dos stacks HTTP compitiendo por auto-configuración.
+
+**Regla:** un proyecto reactivo tiene **exclusivamente** `spring-boot-starter-webflux`. Si por algún motivo excepcional necesitas forzar el tipo de aplicación puedes usar:
+
+```java
+new SpringApplicationBuilder(App.class)
+    .web(WebApplicationType.REACTIVE)
+    .run(args);
+```
+
+pero la solución correcta es eliminar el starter equivocado del `pom.xml`.
+
+Este módulo entrega **solo** `spring-boot-starter-webflux` como confirmación de la regla.
+
+---
+
+## FAQ
+
+**P: ¿Por qué no uso `TestRestTemplate` en los tests?**
+Porque es bloqueante y no ejercita la pila reactiva. Además, con WebFlux + Netty, `TestRestTemplate` fuerza una capa cliente que no representa cómo se usa la app en producción. Se usa `WebTestClient`, que forma parte de `spring-test` (ya viene con `spring-boot-starter-test`) y habla directamente con el servidor Netty aleatorio (`RANDOM_PORT`) o incluso *in-memory* contra un `RouterFunction`.
+
+**P: ¿Por qué H2 con R2DBC y no PostgreSQL?**
+Para mantener el módulo autocontenido (sin Docker ni servicios externos). En producción usarías `r2dbc-postgresql`. La API `ReactiveCrudRepository` es idéntica.
+
+**P: ¿Puedo usar JPA aquí?**
+**No.** JPA es bloqueante por diseño (basado en JDBC). Mezclar JPA en un handler reactivo bloquea el event loop y anula el modelo. Usa R2DBC o, si es imposible cambiar, aísla la llamada JPA con `Mono.fromCallable(...).subscribeOn(Schedulers.boundedElastic())`.
+
+**P: ¿Por qué el handler retorna `Mono<ServerResponse>` en lugar de `Item`?**
+En el estilo funcional, el handler construye la respuesta completa (código de estado, headers, body). En el estilo anotado (`@RestController`), retornarías `Mono<Item>` o `Flux<Item>` directamente. Ambos estilos coexisten en la misma aplicación.
+
+**P: ¿Cómo hago un 404?**
+```java
+repository.findById(id)
+    .flatMap(item -> ServerResponse.ok().bodyValue(item))
+    .switchIfEmpty(ServerResponse.notFound().build());
+```
+El operador `switchIfEmpty` reemplaza el `Mono` vacío por otro `Mono` (aquí, la respuesta 404).
+
+**P: ¿`.block()` está permitido?**
+**Nunca dentro del event loop.** Congela el servidor. Sí en `main()` de un script CLI o en tests puntuales. En tests reactivos usa `StepVerifier` (ver sección siguiente).
+
+**P: ¿Por qué el schema se carga con `spring.sql.init.mode=always`?**
+Porque Spring Boot inicializa `schema.sql` automáticamente al arranque contra el `ConnectionFactory` de R2DBC. Es la vía oficial reactiva (Flyway/Liquibase reactivos requieren configuración adicional).
+
+---
+
+## Testing reactivo con `StepVerifier`
+
+`StepVerifier` (de `reactor-test`) permite aserciones fluidas sobre `Mono`/`Flux` sin bloquear con `.block()`. Ejemplos:
+
+### Verificar un `Mono` con valor
+
+```java
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
+
+@Test
+void monoEmitsValueAndCompletes() {
+    Mono<String> mono = Mono.just("hola");
+
+    StepVerifier.create(mono)
+            .expectNext("hola")
+            .verifyComplete();
+}
+```
+
+### Verificar un `Flux` con varios elementos
+
+```java
+import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
+
+@Test
+void fluxEmitsThreeElements() {
+    Flux<Integer> flux = Flux.range(1, 3);
+
+    StepVerifier.create(flux)
+            .expectNext(1, 2, 3)
+            .verifyComplete();
+}
+```
+
+### Verificar un error
+
+```java
+@Test
+void monoErrorSignalsException() {
+    Mono<Object> mono = Mono.error(new IllegalStateException("boom"));
+
+    StepVerifier.create(mono)
+            .expectErrorMatches(t -> t instanceof IllegalStateException
+                                     && "boom".equals(t.getMessage()))
+            .verify();
+}
+```
+
+### Verificar tiempo virtual (sin esperar de verdad)
+
+```java
+@Test
+void intervalWithVirtualTime() {
+    StepVerifier.withVirtualTime(() -> Flux.interval(Duration.ofSeconds(1)).take(3))
+            .thenAwait(Duration.ofSeconds(3))
+            .expectNext(0L, 1L, 2L)
+            .verifyComplete();
+}
+```
+
+### Integrar `StepVerifier` con un repositorio R2DBC
+
+```java
+@SpringBootTest
+class ItemRepositoryStepTest {
+
+    @Autowired ItemRepository repository;
+
+    @Test
+    void saveAndFind() {
+        Item nuevo = new Item(null, "Cable", new BigDecimal("5.00"));
+
+        StepVerifier.create(repository.save(nuevo)
+                        .flatMap(saved -> repository.findById(saved.getId())))
+                .assertNext(found -> {
+                    assertThat(found.getName()).isEqualTo("Cable");
+                    assertThat(found.getPrice()).isEqualByComparingTo("5.00");
+                })
+                .verifyComplete();
+    }
+}
+```
+
+### Cuándo usar `WebTestClient` vs `StepVerifier`
+
+- **`WebTestClient`**: pruebas de integración a nivel HTTP (routers, handlers, filtros, serialización JSON). Es lo que se usa en `ItemRoutesTest`.
+- **`StepVerifier`**: pruebas unitarias de la lógica reactiva pura (repositorios, services, operadores). Ideal para validar señales `onNext`/`onError`/`onComplete` sin levantar Netty.
+

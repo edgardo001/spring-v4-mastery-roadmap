@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: reactive
+  r2dbc:
+    # DATABASE_TO_LOWER=TRUE: H2 mantiene identificadores en minúsculas para
+    # coincidir con @Table("items") de Spring Data R2DBC.
+    url: r2dbc:h2:mem:///testdb;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+
+server:
+  port: 8080
+
+logging:
+  level:
+    org.springframework.r2dbc: INFO
+    org.springframework.web.reactive: INFO

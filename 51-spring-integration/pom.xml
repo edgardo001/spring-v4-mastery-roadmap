@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    pom.xml del módulo 51 - Spring Integration.
+    Hereda de spring-boot-starter-parent 4.1.0.
+    Java 21 obligatorio.
+    Artefacto final: target/spring-integration-1.0.0.jar
+
+    NOTA IMPORTANTE (Boot 4.1.0):
+    - Se agregan explícitamente `spring-integration-core` y `spring-integration-http`
+      (versiones gestionadas por el BOM de Boot 4.1.0) en lugar de depender de
+      un starter que podría no estar homologado. Esto garantiza compatibilidad.
+    - `spring-boot-starter-web` provee el `TomcatServletWebServerFactory` y Jackson.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.springroadmap</groupId>
+    <artifactId>spring-integration</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>spring-integration</name>
+    <description>Modulo 51 - Spring Integration con IntegrationFlow DSL</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- Web para exponer el endpoint REST que dispara el flujo de integración. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--
+            Spring Integration Core: contiene MessageChannel, IntegrationFlow, DSL,
+            @MessagingGateway, @ServiceActivator, transformers, filters, routers, etc.
+            La versión la fija el BOM de Spring Boot 4.1.0 automáticamente.
+        -->
+        <dependency>
+            <groupId>org.springframework.integration</groupId>
+            <artifactId>spring-integration-core</artifactId>
+        </dependency>
+
+        <!-- Test (JUnit 5, MockMvc, AssertJ). Solo se usa en fase de test. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>spring-integration-1.0.0</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

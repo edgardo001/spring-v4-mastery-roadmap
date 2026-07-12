@@ -225,15 +225,103 @@ cp sample-transactions.csv /tmp/inbox/
 tail -f logs/spring.log
 ```
 
-### Archivos del Proyecto
+---
+
+## Implementación de este Módulo (versión ejecutable)
+
+> **Nota sobre alcance:** el README conceptual arriba describe el escenario completo
+> (FTP + JDBC + Kafka + Mail). Para mantener el módulo compilable y focalizado en
+> el **corazón didáctico** (canales + gateway + IntegrationFlow DSL) sin depender
+> de infraestructura externa, esta implementación entrega un flujo mínimo pero
+> completo: **REST → Gateway → MessageChannel → transform → handle → respuesta**.
+> Extenderlo a FTP/JDBC/Kafka es un ejercicio propuesto al final.
+
+### Compatibilidad con Spring Boot 4.1.0
+- No se usa `spring-boot-starter-integration` (no se garantiza homologación en Boot 4.1.0).
+- Se agrega la dependencia directa **`org.springframework.integration:spring-integration-core`**
+  cuya versión fija el BOM de Boot 4.1.0. Provee `IntegrationFlow` DSL, `@MessagingGateway`,
+  `@EnableIntegration`, `DirectChannel`, transformers y handlers — todo lo necesario.
+
+### Antes vs Ahora (aplicado a este módulo)
+
+| Aspecto | ANTES (Spring 3/4 + Java 8) | AHORA (Spring 6 / Boot 4.1.0 + Java 21) |
+|---------|-----------------------------|-----------------------------------------|
+| Configurar canal | XML `<int:channel id="orderInput"/>` | `@Bean MessageChannel orderInput() { return new DirectChannel(); }` |
+| Definir flujo | XML con `<int:transformer/>` + `<int:service-activator/>` | `IntegrationFlow.from(...).transform(...).handle(...).get()` |
+| Definir gateway | `<int:gateway id="..." service-interface="..." default-request-channel="..."/>` | `@MessagingGateway(defaultRequestChannel="orderInput")` sobre interfaz |
+| DTO/payload | Clase POJO con 30 líneas de boilerplate | `public record Order(String id, String product, int quantity) {}` |
+| Handler | Clase implementando `MessageHandler` | Lambda `(payload, headers) -> "OK - " + payload` |
+| Test de flujo | `@RunWith(SpringJUnit4ClassRunner)` + XML `<import>` | `@SpringBootTest` con `@Autowired OrderGateway` |
+| Test de controller | `@WebMvcTest` (ELIMINADO en Boot 4) | `MockMvcBuilders.standaloneSetup(controller).build()` |
+
+### FAQ del Alumno
+
+**P: ¿Por qué la interfaz `OrderGateway` no tiene implementación y aun así funciona?**
+R: Spring genera un **proxy dinámico** en runtime que implementa la interfaz. Cada
+llamada al método crea un `Message<Order>`, lo envía al `defaultRequestChannel` y
+espera la respuesta. Es magia negra segura de reflection + `java.lang.reflect.Proxy`.
+
+**P: ¿Cuál es la diferencia entre `.transform(...)` y `.handle(...)`?**
+R: `transform` cambia el payload y **sigue** el flujo. `handle` es el endpoint
+**terminal** (o cuasi-terminal) que ejecuta la acción final. En canales síncronos
+(`DirectChannel`), lo retornado por `handle` viaja de vuelta al llamador del gateway.
+
+**P: ¿Puedo tener varios `IntegrationFlow` en la misma app?**
+R: Sí, cada uno es un `@Bean` independiente. Pueden compartir canales o estar aislados.
+
+**P: ¿Qué pasa si el flujo lanza excepción?**
+R: El error viaja por el **`errorChannel`** (canal global). Puedes registrar un
+`@ServiceActivator(inputChannel="errorChannel")` para manejarlo (log, mail, retry).
+
+**P: ¿Por qué `@IntegrationComponentScan` además de `@SpringBootApplication`?**
+R: Los gateways son **interfaces**, no clases con `@Component`. El component-scan
+estándar no las detecta. `@IntegrationComponentScan` busca específicamente
+`@MessagingGateway` en el paquete y genera el proxy correspondiente.
+
+**P: ¿Por qué el test del controller NO usa `@SpringBootTest`?**
+R: El controller solo depende del `OrderGateway` (interfaz), que mockeamos con
+Mockito. Con `MockMvcBuilders.standaloneSetup(...)` armamos el `MockMvc` sin
+levantar el contexto de Spring — más rápido, más focal, y evita el uso de las
+anotaciones test-slice eliminadas en Boot 4.
+
+### Cómo ejecutar
+
+```bash
+# 1) Compilar y empaquetar (usa el toolchain portable en ../jdk-21.0.11+10 y ../apache-maven-3.9.16)
+./build.sh           # Git Bash / Linux / macOS
+# o bien
+./build.ps1          # PowerShell (Windows)
+
+# 2) Ejecutar el JAR resultante
+java -jar target/spring-integration-1.0.0.jar
+
+# 3) Probar el endpoint (en otra terminal)
+curl -X POST http://localhost:8080/api/orders \
+     -H "Content-Type: application/json" \
+     -d '{"id":"ORD-001","product":"Notebook","quantity":3}'
+# Respuesta esperada:
+# OK - Procesando orden ORD-001 - producto=Notebook cantidad=3
+```
+
+### Ejercicios propuestos
+
+1. Agregar un `.filter((Order o) -> o.quantity() > 0)` al flujo para rechazar cantidades inválidas.
+2. Cambiar el `DirectChannel` por un `QueueChannel` con un `PollerSpec` y observar la asincronía.
+3. Añadir un segundo `@Bean IntegrationFlow` que escuche el `errorChannel` y logee excepciones.
+4. Introducir un `.route(...)` que envíe órdenes de más de 100 unidades a un canal "bulkChannel".
+
+### Archivos del Proyecto (implementación real)
+
 | Archivo | Propósito |
 |---------|-----------|
-| `pom.xml` | Dependencias `spring-boot-starter-integration`, `spring-integration-file`, `spring-integration-jdbc`. |
-| `config/FileIntegrationFlowConfig.java` | Declara el `IntegrationFlow` File → Transformer → JDBC con DSL de Java. |
-| `config/ErrorHandlingConfig.java` | `@ServiceActivator` sobre `errorChannel` para notificaciones. |
-| `gateway/TransactionGateway.java` | `@MessagingGateway` para disparar el flujo desde el REST controller. |
-| `transformer/CsvToTransactionTransformer.java` | Convierte líneas CSV en objetos `Transaction`. |
-| `domain/Transaction.java` | Entidad con `id`, `amount`, `type`. |
-| `controller/TransactionController.java` | Endpoint POST que invoca al Gateway. |
-| `resources/application.yml` | Configuración de datasource H2 y rutas de inbox/outbox. |
-| `resources/schema.sql` | DDL de la tabla `transactions`. |
+| `pom.xml` | Depende de `spring-boot-starter-web` + `spring-integration-core` (Boot 4.1.0 BOM). |
+| `build.sh` / `build.ps1` | Scripts portables con JDK 21 y Maven 3.9.16 en la raíz del roadmap. |
+| `src/main/resources/application.yml` | Config mínima. SIN bloque `spring.jackson:` (rompe Boot 4). |
+| `SpringIntegrationApplication.java` | Bootstrap con `@EnableIntegration` + `@IntegrationComponentScan`. |
+| `domain/Order.java` | Record inmutable con id/product/quantity. |
+| `gateway/OrderGateway.java` | Interfaz `@MessagingGateway(defaultRequestChannel="orderInput")`. |
+| `config/IntegrationConfig.java` | `@Bean` del canal `orderInput` y del `IntegrationFlow orderProcessingFlow`. |
+| `controller/OrderController.java` | `POST /api/orders` que invoca al gateway. |
+| `test/.../SpringIntegrationApplicationTests.java` | `contextLoads`. |
+| `test/.../IntegrationFlowTest.java` | `@SpringBootTest` que envía Order al gateway y valida respuesta. |
+| `test/.../OrderControllerTest.java` | MockMvc standalone con `OrderGateway` mockeado. |
