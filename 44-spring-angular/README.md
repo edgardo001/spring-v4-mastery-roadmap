@@ -188,3 +188,118 @@ npm run start # Internamente ejecuta ng serve
 | `frontend/proxy.conf.json` | Proxy reverso de Desarrollo. |
 | `frontend/src/app/core/interceptors/auth.interceptor.ts` | Interceptor funcional (Angular 15+) para inyección JWT. |
 | `frontend/src/app/models/dto.ts` | Interface Typescript para tipado estricto extremo a extremo. |
+
+---
+
+## Implementacion del modulo (esta carpeta)
+
+### Estructura
+
+```
+44-spring-angular/
+  backend/
+    pom.xml                       -> Spring Boot 4.1.0, Java 21, artefacto spring-angular-1.0.0.jar
+    Dockerfile                    -> multi-stage build (JDK -> JRE)
+    src/main/java/com/springroadmap/springangular/
+      SpringAngularApplication.java
+      domain/Task.java            -> record (Long id, String title, boolean done)
+      controller/TaskController.java  -> GET/POST /api/tasks
+      config/CorsConfig.java      -> allowedOrigins http://localhost:4200
+      config/SecurityConfig.java  -> GET publico, POST Basic Auth demo/demo123
+    src/main/resources/application.yml
+    src/test/java/com/springroadmap/springangular/
+      SpringAngularApplicationTests.java  -> contextLoads
+      controller/TaskControllerTest.java  -> MockMvc standalone (GET 200, POST 401)
+  frontend/
+    README.md                     -> instrucciones ng new + service + interceptor + proxy.conf.json
+    Dockerfile                    -> node build + nginx serve
+    nginx.conf                    -> proxy_pass /api/ -> backend:8080
+  docker-compose.yml              -> backend + nginx-frontend
+  build.sh / build.ps1            -> exportan JDK 21 y ejecutan mvn clean verify en backend/
+```
+
+### Como compilar (solo backend)
+
+```powershell
+# Windows PowerShell
+cd 44-spring-angular
+.\build.ps1
+```
+
+```bash
+# Git Bash / Linux / macOS
+cd 44-spring-angular
+./build.sh
+```
+
+Artefacto resultante: `44-spring-angular/backend/target/spring-angular-1.0.0.jar`.
+
+### Como ejecutar con docker compose (backend + frontend juntos)
+
+```bash
+cd 44-spring-angular
+# 1) Previamente: generar el proyecto Angular en frontend/ siguiendo frontend/README.md
+docker compose up --build
+```
+
+Servicios:
+- `spring-angular-backend` en `http://localhost:8080` (API `/api/tasks`).
+- `spring-angular-frontend` en `http://localhost:4200` (nginx sirve el build de Angular y hace `proxy_pass /api/ -> backend:8080`).
+
+### Antes vs Ahora (resumen enterprise)
+
+| Antes (AngularJS 1.x + JSP + Spring 4 WAR) | Ahora (Angular v22 + Spring Boot 4.1 + JAR/Docker) |
+|--------------------------------------------|----------------------------------------------------|
+| WAR unico: backend + `<script src="angular.js">` + JSP | JAR backend + estaticos Angular servidos por nginx |
+| `web.xml`, `applicationContext.xml`, DispatcherServlet manual | `@SpringBootApplication` + auto-configuracion |
+| `WebSecurityConfigurerAdapter.configure(HttpSecurity)` | `@Bean SecurityFilterChain` con DSL lambda |
+| POJO clasico con getters/setters/equals/hashCode | `record Task(Long id, String title, boolean done)` |
+| AngularJS: `$scope`, `$http`, digest cycle manual | Angular v22: signals, `HttpClient`, standalone components |
+| Interceptor: `$httpProvider.interceptors.push(...)` | `HttpInterceptorFn` funcional + `provideHttpClient(withInterceptors(...))` |
+| Sin tipado (bugs `undefined is not a function` en runtime) | TypeScript + `interface TaskDto` sincronizado con `record Task` |
+| Sesion server-side + `JSESSIONID` cookie | Stateless: Basic Auth (demo) / JWT (prod) en header `Authorization` |
+| Mismo puerto -> no habia CORS | Angular:4200 vs Spring:8080 -> `proxy.conf.json` (dev) + `CorsConfig` (prod) |
+| Deploy: build WAR y copiar a Tomcat externo | `docker compose up` con backend + nginx separados |
+
+### FAQ
+
+**P: Por que el POST devuelve 401 pero el GET no?**
+R: `SecurityConfig` permite GET publico y exige autenticacion para el resto. El
+POST sin header `Authorization` es rechazado por Spring Security con 401.
+El HttpInterceptor de Angular es quien debe inyectar `Authorization: Basic ...`
+(o `Bearer <jwt>`) en cada request saliente.
+
+**P: Por que usar `proxy.conf.json` en dev si ya tengo `@CrossOrigin`?**
+R: El proxy elimina el problema por completo: el navegador ve todo como mismo
+origen (`localhost:4200`). CORS solo se dispara cuando el navegador detecta
+origenes distintos. `@CrossOrigin` es el plan B para cuando NO hay proxy
+(tests, integracion directa, prod sin nginx reverso).
+
+**P: Por que el record `Task` no usa `getTitle()` sino `title()`?**
+R: Los records de Java 21 exponen accessors sin prefijo `get`/`is`. Jackson los
+serializa como `{"id":1,"title":"...","done":false}`, que es EXACTAMENTE lo que
+la `interface TaskDto` de TypeScript espera. Contrato JSON identico en ambos
+lados sin configuracion adicional.
+
+**P: En produccion, quien resuelve el CORS?**
+R: El nginx del contenedor `frontend` sirve los estaticos de Angular Y hace
+`proxy_pass /api/ -> backend:8080`. Desde el navegador, todo se ve como
+`http://localhost:4200/...`, mismo origen, sin CORS. Es la configuracion
+recomendada para deploy corporativo.
+
+**P: Por que Basic Auth en vez de JWT?**
+R: Solo por simplicidad didactica del modulo 44. El path real de produccion es
+JWT (Modulo 14) o OAuth2 (Modulo 34). El `HttpInterceptor` de Angular cambia
+solo la cadena del header (`Basic ...` -> `Bearer <jwt>`).
+
+**P: Por que el frontend queda documentado y no compilado?**
+R: `ng new` genera cientos de archivos + `node_modules`. Incluir eso en el
+repo del roadmap es contraproducente. El `README.md` de `frontend/` explica
+paso a paso como generarlo y consumir la API — es el patron enterprise real
+(monorepo con front y back independientes, cada uno con su ciclo de build).
+
+**P: Por que los tests son MockMvc standalone y no `@WebMvcTest`?**
+R: Convencion MEMORY.md del roadmap: Boot 4.1.0 preview no tiene `@WebMvcTest`
+ni `@AutoConfigureMockMvc` estables. `MockMvcBuilders.standaloneSetup(...)` es
+portable, rapido y no necesita levantar el `ApplicationContext` completo.
+

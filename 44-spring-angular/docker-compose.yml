@@ -1,0 +1,36 @@
+# Modulo 44 - docker compose: levanta backend (Spring) + frontend (nginx sirviendo Angular).
+#
+# Uso:
+#   docker compose up --build
+#     -> backend en http://localhost:8080
+#     -> frontend en http://localhost:4200 (nginx en el contenedor sirve el build de Angular)
+#
+# En este esquema nginx hace proxy_pass /api/ -> backend:8080 (ver frontend/nginx.conf),
+# por lo tanto en produccion NO hay CORS (todo se ve como mismo origen desde el navegador).
+#
+# Detener: docker compose down
+services:
+  backend:
+    build:
+      context: ./backend
+    image: spring-angular-backend:1.0.0
+    container_name: spring-angular-backend
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/tasks"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+    image: spring-angular-frontend:1.0.0
+    container_name: spring-angular-frontend
+    ports:
+      - "4200:80"
+    depends_on:
+      - backend

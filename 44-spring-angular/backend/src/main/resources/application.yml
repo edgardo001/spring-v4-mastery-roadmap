@@ -1,0 +1,13 @@
+# Configuracion del backend spring-angular (modulo 44).
+# Todo lo demas es autoconfiguracion de Spring Boot.
+server:
+  port: 8080
+
+spring:
+  application:
+    name: spring-angular-backend
+
+logging:
+  level:
+    org.springframework.security: INFO
+    com.springroadmap.springangular: DEBUG
