@@ -1,0 +1,39 @@
+# Configuración del módulo 50 - Spring Batch.
+# Notas para principiantes:
+#   - Spring Batch necesita 9 tablas propias (BATCH_JOB_INSTANCE, BATCH_STEP_EXECUTION, ...).
+#     Con 'initialize-schema: always' Spring las crea al arrancar sobre la BD que tengamos.
+#   - 'spring.batch.job.enabled: false' evita que Boot corra TODOS los jobs automáticamente
+#     al levantar el contexto. Nosotros los disparamos vía REST o test.
+spring:
+  application:
+    name: spring-batch
+
+  datasource:
+    url: jdbc:h2:mem:batchdb;DB_CLOSE_DELAY=-1;MODE=LEGACY
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  jpa:
+    hibernate:
+      # 'update' crea/actualiza la tabla CUSTOMER (destino del Writer).
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  batch:
+    jdbc:
+      # Fuerza a Spring Batch a crear su metadata (BATCH_JOB_*) en H2.
+      initialize-schema: always
+    job:
+      # No autoejecutar el Job al arrancar: se dispara manualmente por REST o test.
+      enabled: false
+
+server:
+  port: 8080
+
+logging:
+  level:
+    org.springframework.batch: INFO

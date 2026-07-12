@@ -258,14 +258,46 @@ mvn spring-boot:run
 # SELECT * FROM BATCH_STEP_EXECUTION;
 ```
 
+### Antes vs Ahora (Java 8 + shell cron → Spring Batch 5.x)
+
+| Tema | ANTES (shell + SQL manual) | AHORA (Spring Batch 5) |
+|------|-----------------------------|------------------------|
+| Disparo | `crontab -e` → `0 2 * * * /opt/import.sh` | `POST /api/batch/run` o `@Scheduled(cron="0 0 2 * * *")` + `JobLauncher.run(job, params)` |
+| Lectura del CSV | `while read line; do ...` en bash | `FlatFileItemReader<CustomerDto>` con `BeanWrapperFieldSetMapper` |
+| Validación | `awk '/@/'` casero, sin tipado | `ItemProcessor<CustomerDto, Customer>` con lambda tipada |
+| Persistencia | `INSERT INTO customer ...` por fila (10 M de commits, horas) | `JpaItemWriter<Customer>` + `chunk(10, tx)` = 1 commit cada 10 filas |
+| Reinicio ante caída | Volver a correr TODO desde la fila 0 | `JobRepository` (`BATCH_STEP_EXECUTION`) retoma desde el último chunk COMPLETED |
+| Toleracia a filas malas | `if [ error ]; then exit 1; fi` (aborta todo) | `.faultTolerant().skip(FlatFileParseException.class).skipLimit(100)` |
+| Instanciación de builders | `JobBuilderFactory` / `StepBuilderFactory` (deprecados en Batch 5) | `new JobBuilder(name, jobRepository)` / `new StepBuilder(name, jobRepository)` |
+| Bean container | XML `applicationContext.xml` | `@Configuration` + `@Bean` en Java |
+| Métricas y trazabilidad | `echo` a un `.log` que nadie lee | Tablas `BATCH_JOB_EXECUTION`, `BATCH_STEP_EXECUTION` + Actuator |
+
+### FAQ del Alumno
+
+- **¿Qué es un "Job" y un "Step"?** — Un Job es todo el trabajo ("importar CSV nocturno"). Un Step es una fase dentro de ese trabajo ("leer archivo" o "generar reporte"). Un Job puede tener varios Steps encadenados.
+- **¿Qué es un "chunk"?** — Un grupo de N ítems que se leen y procesan juntos y se escriben a la BD en UNA sola transacción. Si `chunk=10` y hay 5000 filas, harás 500 commits en vez de 5000.
+- **¿Por qué `spring.batch.job.enabled: false`?** — Porque por defecto Spring Boot ejecuta TODOS los `Job` beans al arrancar. Con esta línea el arranque es limpio y nosotros decidimos cuándo dispararlo (por REST o por scheduler).
+- **¿Qué son `JobParameters`?** — Los "argumentos" con los que corres el Job (ej: fecha). Spring Batch usa (Job + JobParameters) como IDENTIFICADOR ÚNICO de una corrida. Por eso repetir los mismos parámetros lanza `JobInstanceAlreadyCompleteException`. Truco: agrega siempre un `timestamp` único.
+- **¿Qué es `JobRepository`?** — Un conjunto de tablas (`BATCH_JOB_INSTANCE`, `BATCH_STEP_EXECUTION`, ...) donde Spring Batch anota qué se ejecutó y hasta qué chunk. Es lo que permite REINICIAR desde donde se cayó.
+- **¿Qué pasa si el Processor devuelve `null`?** — Ese ítem se filtra y NO llega al Writer. Útil para descartar filas inválidas sin abortar el Job.
+- **¿Por qué `EntityManagerFactory` en el `JpaItemWriter` y no `EntityManager`?** — Porque cada chunk abre su propia transacción y necesita su propio EntityManager. El Writer lo pide bajo demanda a la Factory.
+- **¿Chunk grande = más rápido siempre?** — No. Chunk muy grande = transacciones largas, bloqueos de BD, y `OutOfMemoryError` en el heap. Sweet spot: 500-2000 en producción. Aquí usamos 10 solo porque el CSV tiene 5 filas.
+- **¿Cómo veo lo que hizo Spring Batch?** — Consulta H2 en `http://localhost:8080/h2-console`: `SELECT * FROM BATCH_JOB_EXECUTION` y `SELECT * FROM BATCH_STEP_EXECUTION`.
+- **¿Por qué en el test uso `@SpringBatchTest`?** — Porque expone `JobLauncherTestUtils`, un helper que ejecuta el Job de forma síncrona y te devuelve el `JobExecution` para poder afirmar `BatchStatus.COMPLETED`.
+
 ### Archivos del Proyecto
 | Archivo | Propósito |
 |---------|-----------|
-| `config/ImportCsvJobConfig.java` | Definición del `Job` y `Step` con `JobBuilder`/`StepBuilder`. |
-| `config/BatchReadersWriters.java` | Beans `FlatFileItemReader`, `ItemProcessor`, `JpaItemWriter`. |
-| `config/ResilientStepConfig.java` | Step con `faultTolerant()`, skip y retry. |
-| `config/PartitionedStepConfig.java` | Partitioning multi-hilo con `Partitioner` y `TaskExecutor`. |
-| `scheduler/NightlyBatchScheduler.java` | `@Scheduled` cron que lanza el Job vía `JobLauncher`. |
-| `domain/Customer.java` | Entidad JPA destino. |
-| `domain/CustomerCsv.java` | POJO que mapea la fila del CSV. |
-| `application.yml` | Config de datasource, `spring.batch.jdbc.initialize-schema=always`. |
+| `pom.xml` | Spring Boot 4.1.0 + `spring-boot-starter-batch` + `data-jpa` + H2 + `spring-batch-test`. |
+| `build.sh` / `build.ps1` | Scripts que forzan JDK 21 portable y ejecutan `mvn clean verify`. |
+| `src/main/resources/application.yml` | H2 in-memory + `spring.batch.jdbc.initialize-schema: always` + `spring.batch.job.enabled: false`. |
+| `src/main/resources/customers.csv` | CSV de ejemplo con 5 filas (name, email). |
+| `SpringBatchApplication.java` | Clase `@SpringBootApplication` que arranca el contexto. |
+| `domain/Customer.java` | Entidad JPA (id, name, email) - destino del Writer. |
+| `domain/CustomerDto.java` | POJO plano que mapea la fila del CSV. |
+| `repository/CustomerRepository.java` | `JpaRepository<Customer, Long>`. |
+| `config/BatchConfig.java` | `@Bean Job importCustomerJob`, `@Bean Step`, Reader/Processor/Writer. |
+| `controller/BatchController.java` | `POST /api/batch/run` → `JobLauncher.run(...)` → devuelve `{jobExecutionId, status}`. |
+| `SpringBatchApplicationTests.java` | `contextLoads`. |
+| `BatchIntegrationTest.java` | `@SpringBootTest` + `@SpringBatchTest` con `JobLauncherTestUtils`. Verifica `COMPLETED` y `count()==5`. |
+| `BatchControllerTest.java` | MockMvc standalone con `JobLauncher` mockeado. |
